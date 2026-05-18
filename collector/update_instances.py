@@ -3,7 +3,8 @@ import json
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_FILE = os.path.join(BASE_DIR, 'instances.json')
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+OUTPUT_FILE = os.path.join(PROJECT_ROOT, 'instances.json')
 API_URL = "https://status.d420.de/api/v1/instances"
 
 def fetch_and_save():

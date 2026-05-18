@@ -1,12 +1,8 @@
 name: Cleanup Stored Tweets
 
-concurrency:
-  group: x2ding-main-write
-  cancel-in-progress: false
-
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '23 2 * * *'
   workflow_dispatch:
     inputs:
       retention_days:
@@ -16,45 +12,36 @@ on:
       max_records:
         description: '最大保留记录数'
         required: false
-        default: '2000'
+        default: '5000'
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: collector/requirements.txt
 
-    - name: Run cleanup
-      run: |
-        python twitter_monitor.py cleanup \
-          --retention-days "${RETENTION_DAYS}" \
-          --max-records "${MAX_RECORDS}"
-      env:
-        RETENTION_DAYS: ${{ inputs.retention_days || '30' }}
-        MAX_RECORDS: ${{ inputs.max_records || '2000' }}
+      - name: Install dependencies
+        working-directory: collector
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Commit and push if changed
-      run: |
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-
-        git add -A data
-
-        if git diff --staged --quiet; then
-          echo "No changes to commit"
-        else
-          git commit -m "chore: cleanup stored tweets [skip ci]"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push
-        fi
+      - name: Run cleanup
+        working-directory: collector
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RETENTION_DAYS: ${{ inputs.retention_days || '30' }}
+          MAX_RECORDS: ${{ inputs.max_records || '5000' }}
+        run: |
+          python twitter_monitor.py cleanup \
+            --retention-days "${RETENTION_DAYS}" \
+            --max-records "${MAX_RECORDS}"

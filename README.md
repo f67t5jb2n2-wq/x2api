@@ -1,155 +1,151 @@
-# Twitter (X) 监控归档工具
+# x2ding
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-Enabled-brightgreen)](https://github.com/features/actions)
+一个面向 X/Twitter 监控的订阅系统：
 
-这是一个基于 Playwright Stealth 的 Twitter/X 监控工具。它不再把结果推送到钉钉，而是把抓到的动态保存到仓库本地数据文件里，支持：
+- `collector/` 用 Python + Playwright 抓取 Nitter/X 内容
+- `service/` 用 Next.js 提供 API key 管理接口和 RSS 输出
+- `shared/schema.sql` 定义统一 PostgreSQL 结构
 
-- 定时抓取并归档到 `data/tweets.jsonl`
-- 自动记录每个订阅目标的最新推文 ID，避免重复保存
-- 定时清理历史数据
-- 在 GitHub Actions 里手动查询历史记录
-- 动态订阅，不再依赖写死的 `TWITTER_USER` Secret
+## 架构
 
-## 数据文件
+- GitHub Actions 定时执行 `collector/twitter_monitor.py monitor`
+- 采集结果写入 PostgreSQL
+- Vercel 部署 `service`
+- 客户端通过 `apiKey` 管理订阅，通过 `feedToken` 消费 RSS
 
-- `data/subscriptions.json`: 订阅列表
-- `data/last_id.json`: 每个目标最近一次保存的推文 ID
-- `data/tweets.jsonl`: 历史归档，JSON Lines 格式
-- `data/query_results/`: 查询结果输出目录
-- `instances.json`: 健康 Nitter 实例缓存
+## 目录
 
-## 运行方式
-
-### 1. 定时监控
-
-GitHub Actions 里的 `Twitter Monitor` 会按计划运行：
-
-- 北京时间 08:00 - 22:00 每 30 分钟一次
-- 其余时间每 2 小时一次
-
-执行命令：
-
-```bash
-python twitter_monitor.py monitor
+```text
+collector/   Python 抓取器与 Actions 入口
+service/     Next.js API + RSS 服务
+shared/      数据库 schema
+data/        本地查询产物与临时文件
 ```
 
-默认会在每次监控后自动清理，只保留最近 30 天、最多 2000 条记录。
+## 数据库初始化
 
-### 2. 动态订阅
-
-通过 `Manage Subscriptions And Query` workflow 管理订阅，不再需要配置 `TWITTER_USER` Secret。
-
-支持的目标格式：
-
-- 单个用户: `elonmusk`
-- 多个用户: `elonmusk,OpenAI,AnthropicAI`
-- 关键词搜索: `search:AI safety`
-- 混合: `elonmusk,search:#ChatGPT`
-
-本地命令也可以直接用：
+先准备 PostgreSQL，然后执行：
 
 ```bash
-python twitter_monitor.py subscribe add --targets "elonmusk,OpenAI"
-python twitter_monitor.py subscribe remove --targets "OpenAI"
-python twitter_monitor.py subscribe set --targets "elonmusk,search:AI safety"
-python twitter_monitor.py subscribe list
+psql "$DATABASE_URL" -f shared/schema.sql
 ```
 
-### 3. 查询历史
+如果你使用 Neon / Supabase，把 `DATABASE_URL` 分别配置到：
 
-可以在 GitHub Actions 里手动触发 `Manage Subscriptions And Query`，选择 `query` 动作并填写筛选条件。
-
-本地命令示例：
-
-```bash
-python twitter_monitor.py query --target "elonmusk" --limit 10
-python twitter_monitor.py query --keyword "grok" --since "2026-05-01T00:00:00+00:00"
-python twitter_monitor.py query --keyword "OpenAI" --output data/query_results/query-result.json
-```
-
-查询结果会：
-
-- 打印到 Actions 日志
-- 输出为 `data/query_results/query-result.json`
-- 在 GitHub Actions 中作为 artifact 上传，方便下载
-
-### 4. 定时清理
-
-`Cleanup Stored Tweets` workflow 每天运行一次，也支持手动指定：
-
-- `retention_days`
-- `max_records`
-
-本地命令示例：
-
-```bash
-python twitter_monitor.py cleanup --retention-days 30 --max-records 2000
-```
-
-## GitHub Actions 工作流
-
-### `Twitter Monitor`
-
-定时抓取订阅目标，并将下列文件提交回仓库：
-
-- `data/last_id.json`
-- `data/tweets.jsonl`
-- `data/subscriptions.json`
-
-### `Manage Subscriptions And Query`
-
-支持五类动作：
-
-- `subscribe_add`
-- `subscribe_remove`
-- `subscribe_set`
-- `subscribe_list`
-- `query`
-
-### `Cleanup Stored Tweets`
-
-定时或手动清理 `data/tweets.jsonl`。
-
-### `Update Nitter Instances`
-
-定时刷新 `instances.json`。
-
-## 首次部署
-
-1. Fork 仓库
-2. 打开仓库的 `Settings -> Actions -> General`
-3. 将 `Workflow permissions` 设为 `Read and write permissions`
-4. 在 `Actions` 页先手动运行一次：
-   - `Update Nitter Instances`
-   - `Manage Subscriptions And Query`，用 `subscribe_set` 配置你的初始订阅
-   - `Twitter Monitor`
+- GitHub Actions secret: `DATABASE_URL`
+- Vercel project env: `DATABASE_URL`
 
 ## 本地运行
 
+### 1. 安装 service 依赖
+
 ```bash
-pip install -r requirements.txt
-playwright install chromium
-python twitter_monitor.py subscribe set --targets "elonmusk,search:AI safety"
-python twitter_monitor.py monitor
-python twitter_monitor.py query --limit 5
+npm install
 ```
 
-## 兼容说明
+### 2. 安装 collector 依赖
 
-如果仓库里之前还在使用：
+```bash
+python3 -m pip install -r collector/requirements.txt
+playwright install chromium
+```
 
-- 根目录 `last_id.json`
-- `TWITTER_USER` 环境变量
+### 3. 注册一个客户端
 
-脚本会在首次运行时自动迁移到 `data/` 目录结构。
+```bash
+DATABASE_URL=... python3 collector/twitter_monitor.py register-client --label "local"
+```
 
-## 注意
+返回结果里会包含：
 
-- 仓库现在会把归档结果提交回 git 历史，适合轻量归档和查询。
-- 如果后续数据量明显变大，更适合迁到 SQLite 或外部 KV/数据库。
-- `query` 当前是查归档结果，不是实时在线搜索。
+- `apiKey`
+- `feedToken`
+- `feedUrlPath`
 
-## 许可证
+### 4. 给这个客户端设置订阅
 
-本项目采用 [MIT License](LICENSE) 开源。
+```bash
+DATABASE_URL=... python3 collector/twitter_monitor.py subscribe set \
+  --api-key "x2d_xxx" \
+  --targets "OpenAI,search:AI safety"
+```
+
+### 5. 运行采集
+
+```bash
+DATABASE_URL=... python3 collector/twitter_monitor.py monitor
+```
+
+### 6. 启动服务
+
+```bash
+DATABASE_URL=... npm run dev --workspace service
+```
+
+## Vercel 部署
+
+按 Vercel 官方 monorepo 方式，把这个仓库作为一个 monorepo 导入，并把项目的 `Root Directory` 设为 `service`。文档见 [Using Monorepos](https://vercel.com/docs/monorepos/) 和 [General settings](https://vercel.com/docs/project-configuration/general-settings)。
+
+## API
+
+### `POST /api/client/register`
+
+创建一个匿名客户端：
+
+```json
+{
+  "label": "my-device"
+}
+```
+
+### `GET /api/subscriptions`
+
+Header:
+
+```text
+Authorization: Bearer x2d_xxx
+```
+
+### `PUT /api/subscriptions`
+
+覆盖订阅：
+
+```json
+{
+  "targets": ["OpenAI", "search:AI safety"]
+}
+```
+
+### `POST /api/subscriptions`
+
+增量添加订阅。
+
+### `DELETE /api/subscriptions`
+
+增量删除订阅。
+
+### `GET /api/items`
+
+支持参数：
+
+- `limit`
+- `target`
+- `keyword`
+- `since`
+
+### `GET /rss/:feedToken.xml`
+
+返回该客户端的聚合 RSS。
+
+## GitHub Actions
+
+- `Twitter Monitor`: 定时抓取
+- `Manage Subscriptions And Query`: 手动注册客户端、管理订阅、导出查询
+- `Cleanup Stored Tweets`: 清理历史数据
+- `Update Nitter Instances`: 刷新实例列表
+
+## 当前取舍
+
+- 采集仍依赖第三方 Nitter/X 镜像，稳定性取决于目标站点和实例可用性
+- 没有登录系统，`apiKey` 就是匿名客户端身份
+- RSS 用 `feedToken` 暴露，不直接使用 `apiKey`

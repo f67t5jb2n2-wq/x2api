@@ -32,3 +32,17 @@ Thumbs.db
 
 # 查询结果是临时产物
 data/query_results/
+
+# Service / Next.js
+node_modules/
+service/.next/
+service/node_modules/
+service/.vercel/
+
+# Local env files
+.env
+.env.*
+
+# Database scratch
+.pgdata/
+.pgsocket/

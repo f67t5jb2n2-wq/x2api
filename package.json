@@ -1,0 +1,13 @@
+{
+  "name": "x2ding-workspace",
+  "private": true,
+  "workspaces": [
+    "service"
+  ],
+  "scripts": {
+    "service:dev": "npm run dev --workspace service",
+    "service:build": "npm run build --workspace service",
+    "service:test": "npm run test --workspace service",
+    "service:lint": "npm run lint --workspace service"
+  }
+}

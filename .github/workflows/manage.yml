@@ -1,16 +1,18 @@
 name: Manage Subscriptions And Query
 
-concurrency:
-  group: x2ding-main-write
-  cancel-in-progress: false
-
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: '执行动作: subscribe_add / subscribe_remove / subscribe_set / subscribe_list / query'
+        description: '执行动作: register_client / subscribe_add / subscribe_remove / subscribe_set / subscribe_list / query'
         required: true
         default: 'query'
+      api_key:
+        description: '客户端 API key（注册客户端时可留空）'
+        required: false
+      label:
+        description: '注册客户端时的标签'
+        required: false
       targets:
         description: '订阅目标，支持逗号或换行。示例: elonmusk,OpenAI,search:AI safety'
         required: false
@@ -34,90 +36,97 @@ on:
 jobs:
   manage:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        cache: 'pip'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: collector/requirements.txt
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Install dependencies
+        working-directory: collector
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Run requested action
-      shell: bash
-      run: |
-        mkdir -p data/query_results
-        case "${{ inputs.action }}" in
-          subscribe_add)
-            python twitter_monitor.py subscribe add --targets "${{ inputs.targets }}"
-            ;;
-          subscribe_remove)
-            python twitter_monitor.py subscribe remove --targets "${{ inputs.targets }}"
-            ;;
-          subscribe_set)
-            python twitter_monitor.py subscribe set --targets "${{ inputs.targets }}"
-            ;;
-          subscribe_list)
-            python twitter_monitor.py subscribe list
-            ;;
-          query)
-            cmd=(python twitter_monitor.py query --limit "$INPUT_LIMIT" --output data/query_results/query-result.json)
-            if [[ -n "$INPUT_TARGET" ]]; then
-              cmd+=(--target "$INPUT_TARGET")
-            fi
-            if [[ -n "$INPUT_KEYWORD" ]]; then
-              cmd+=(--keyword "$INPUT_KEYWORD")
-            fi
-            if [[ -n "$INPUT_SINCE" ]]; then
-              cmd+=(--since "$INPUT_SINCE")
-            fi
-            if [[ -n "$INPUT_UNTIL" ]]; then
-              cmd+=(--until "$INPUT_UNTIL")
-            fi
-            "${cmd[@]}"
-            ;;
-          *)
-            echo "Unsupported action: ${{ inputs.action }}"
-            exit 1
-            ;;
-        esac
-      env:
-        INPUT_TARGET: ${{ inputs.target }}
-        INPUT_KEYWORD: ${{ inputs.keyword }}
-        INPUT_SINCE: ${{ inputs.since }}
-        INPUT_UNTIL: ${{ inputs.until }}
-        INPUT_LIMIT: ${{ inputs.limit }}
+      - name: Run requested action
+        shell: bash
+        working-directory: collector
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_API_KEY: ${{ inputs.api_key }}
+          INPUT_LABEL: ${{ inputs.label }}
+          INPUT_TARGETS: ${{ inputs.targets }}
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_KEYWORD: ${{ inputs.keyword }}
+          INPUT_SINCE: ${{ inputs.since }}
+          INPUT_UNTIL: ${{ inputs.until }}
+          INPUT_LIMIT: ${{ inputs.limit }}
+        run: |
+          mkdir -p ../data/query_results
+          case "$INPUT_ACTION" in
+            register_client)
+              cmd=(python twitter_monitor.py register-client)
+              if [[ -n "$INPUT_LABEL" ]]; then
+                cmd+=(--label "$INPUT_LABEL")
+              fi
+              "${cmd[@]}" | tee ../data/query_results/register-client.json
+              ;;
+            subscribe_add)
+              python twitter_monitor.py subscribe add --api-key "$INPUT_API_KEY" --targets "$INPUT_TARGETS"
+              ;;
+            subscribe_remove)
+              python twitter_monitor.py subscribe remove --api-key "$INPUT_API_KEY" --targets "$INPUT_TARGETS"
+              ;;
+            subscribe_set)
+              python twitter_monitor.py subscribe set --api-key "$INPUT_API_KEY" --targets "$INPUT_TARGETS"
+              ;;
+            subscribe_list)
+              python twitter_monitor.py subscribe list --api-key "$INPUT_API_KEY"
+              ;;
+            query)
+              cmd=(python twitter_monitor.py query --limit "$INPUT_LIMIT" --output ../data/query_results/query-result.json)
+              if [[ -n "$INPUT_API_KEY" ]]; then
+                cmd+=(--api-key "$INPUT_API_KEY")
+              fi
+              if [[ -n "$INPUT_TARGET" ]]; then
+                cmd+=(--target "$INPUT_TARGET")
+              fi
+              if [[ -n "$INPUT_KEYWORD" ]]; then
+                cmd+=(--keyword "$INPUT_KEYWORD")
+              fi
+              if [[ -n "$INPUT_SINCE" ]]; then
+                cmd+=(--since "$INPUT_SINCE")
+              fi
+              if [[ -n "$INPUT_UNTIL" ]]; then
+                cmd+=(--until "$INPUT_UNTIL")
+              fi
+              "${cmd[@]}"
+              ;;
+            *)
+              echo "Unsupported action: $INPUT_ACTION"
+              exit 1
+              ;;
+          esac
 
-    - name: Upload query result artifact
-      if: inputs.action == 'query'
-      uses: actions/upload-artifact@v4
-      with:
-        name: query-result
-        path: data/query_results/query-result.json
-        if-no-files-found: error
+      - name: Upload query result artifact
+        if: inputs.action == 'query'
+        uses: actions/upload-artifact@v4
+        with:
+          name: query-result
+          path: data/query_results/query-result.json
+          if-no-files-found: error
 
-    - name: Commit and push data changes
-      run: |
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-
-        git add -A data/subscriptions.json
-
-        if git diff --staged --quiet; then
-          echo "No changes to commit"
-        else
-          git commit -m "chore: update subscription/query data [skip ci]"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push
-        fi
+      - name: Upload register artifact
+        if: inputs.action == 'register_client'
+        uses: actions/upload-artifact@v4
+        with:
+          name: register-client
+          path: data/query_results/register-client.json
+          if-no-files-found: error

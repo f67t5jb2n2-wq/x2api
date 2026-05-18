@@ -88,6 +88,8 @@ DATABASE_URL=... npm run dev --workspace service
 
 ## API
 
+更完整的接口说明见：[docs/SERVICE_API.md](docs/SERVICE_API.md)
+
 ### `POST /api/client/register`
 
 创建一个匿名客户端：

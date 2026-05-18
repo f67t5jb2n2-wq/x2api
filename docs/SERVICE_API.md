@@ -1,0 +1,726 @@
+# x2ding 服务端接口文档
+
+本文档说明 `x2ding / x2api` 服务端的整体架构、核心模块、鉴权方式、JSON 查询接口，以及 RSS 订阅接口。
+
+适用场景：
+
+- 客户端通过 `apiKey` 维护自己的订阅列表
+- 客户端通过 JSON API 查询最近抓取结果
+- RSS 阅读器或外部系统通过 RSS URL 消费聚合订阅流
+- GitHub Actions 定时抓取，Vercel 对外提供查询与 RSS 服务
+
+## 1. 整体架构
+
+### 1.1 数据流
+
+1. GitHub Actions 按计划触发采集任务
+2. Python 采集器从数据库读取当前所有活跃订阅目标
+3. 采集器通过 Nitter/X 相关来源抓取指定用户或关键词内容
+4. 新内容写入 PostgreSQL
+5. Vercel 上的 Next.js 服务读取 PostgreSQL，对外提供 JSON API 与 RSS
+6. 客户端使用 `apiKey` 管理订阅、查询数据
+7. RSS 使用 `feedToken` 生成专属订阅链接，供 RSS 阅读器或外部系统消费
+
+### 1.2 功能模块
+
+#### A. 采集模块 `collector/`
+
+- 负责抓取 X/Twitter 相关内容
+- 入口脚本：`collector/twitter_monitor.py`
+- 支持：
+  - 注册客户端
+  - 管理订阅
+  - 手动查询
+  - 定时采集
+  - 清理历史数据
+
+#### B. 服务模块 `service/`
+
+- 基于 Next.js App Router
+- 提供：
+  - 客户端注册接口
+  - 订阅管理接口
+  - 内容查询接口
+  - RSS 输出接口
+
+#### C. 数据库模块 `shared/schema.sql`
+
+核心表：
+
+- `clients`
+  - 客户端身份
+  - 保存 `api_key`、`feed_token`
+- `targets`
+  - 订阅目标
+  - 支持两类：`user`、`keyword`
+- `subscriptions`
+  - 客户端与目标之间的订阅关系
+- `items`
+  - 抓取到的内容明细
+- `crawl_state`
+  - 每个目标的最近抓取状态
+
+#### D. 调度模块 `.github/workflows/`
+
+- `Twitter Monitor`
+  - 每 12 分钟运行一次采集
+- `Cleanup Stored Tweets`
+  - 定期清理历史数据
+- `Update Nitter Instances`
+  - 定期更新可用实例列表
+- `Manage Subscriptions And Query`
+  - 手动执行注册、订阅管理、查询
+
+## 2. 身份模型与鉴权
+
+本系统当前没有传统用户系统，采用“匿名客户端”模型。
+
+每个客户端在注册后会获得两种凭证：
+
+- `apiKey`
+  - 用于调用 JSON API
+  - 代表客户端身份
+- `feedToken`
+  - 用于生成 RSS URL
+  - RSS URL 本身就是访问凭证
+
+### 2.1 JSON API 鉴权
+
+支持两种传法：
+
+#### 方式 A：`Authorization` 头
+
+```http
+Authorization: Bearer x2d_xxx
+```
+
+#### 方式 B：`x-api-key` 头
+
+```http
+x-api-key: x2d_xxx
+```
+
+说明：
+
+- 两种方式任选其一
+- 推荐优先使用 `Authorization: Bearer <apiKey>`
+
+### 2.2 RSS 鉴权
+
+RSS 不使用 `apiKey`。
+
+RSS 通过 `feedToken` 直接访问，例如：
+
+```text
+/rss/feed_xxx.xml
+```
+
+因此：
+
+- 拿到 RSS URL 即可访问
+- 不需要额外请求头
+- `feedToken` 应视为敏感凭证，不要公开泄漏
+
+## 3. 订阅目标格式
+
+系统支持两类订阅目标：
+
+- 用户订阅：直接传用户名
+- 关键词订阅：使用 `search:` 前缀
+
+示例：
+
+```text
+OpenAI
+elonmusk
+search:特朗普
+search:马斯克
+search:黑料
+```
+
+规则：
+
+- 普通字符串会被视为 `user`
+- `search:关键词` 会被视为 `keyword`
+- 目标会做大小写归一化去重
+- 空字符串会报错
+
+## 4. 服务端功能划分
+
+从接入角度看，服务端可以分成 4 类能力：
+
+### 4.1 客户端注册
+
+- 创建匿名客户端
+- 生成 `apiKey` 和 `feedToken`
+
+### 4.2 订阅管理
+
+- 查询当前订阅
+- 整体覆盖订阅
+- 增量新增订阅
+- 增量删除订阅
+
+### 4.3 内容查询
+
+- 拉取客户端订阅对应的最新内容
+- 支持按目标、关键词、时间筛选
+
+### 4.4 RSS 输出
+
+- 将客户端订阅结果输出为标准 RSS
+- 适合外部 RSS 阅读器、自动化系统或消息桥接
+
+## 5. API 基础信息
+
+### 5.1 Base URL
+
+部署后以你的 Vercel 域名为准，例如：
+
+```text
+https://x2api-service.vercel.app
+```
+
+### 5.2 内容类型
+
+JSON 接口请求体统一使用：
+
+```http
+Content-Type: application/json
+```
+
+### 5.3 通用错误格式
+
+接口失败时通常返回：
+
+```json
+{
+  "error": "错误说明"
+}
+```
+
+常见状态码：
+
+- `200` 请求成功
+- `201` 创建成功
+- `400` 请求参数错误或业务错误
+- `401` 缺少凭证或凭证无效
+- `500` 服务端内部错误
+
+## 6. 客户端注册接口
+
+### `POST /api/client/register`
+
+创建一个新的匿名客户端。
+
+#### 请求头
+
+无需鉴权。
+
+#### 请求体
+
+```json
+{
+  "label": "ios-ghostbrowser"
+}
+```
+
+字段说明：
+
+- `label`
+  - 可选
+  - 用于给客户端打标签，便于区分设备或来源
+
+#### 成功响应 `201`
+
+```json
+{
+  "id": "4dd5b3c3-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "label": "ios-ghostbrowser",
+  "apiKey": "x2d_xxxxxxxxxxxxxxxxxxxxx",
+  "apiKeyPreview": "x2d_xxx...xxxx",
+  "feedToken": "feed_xxxxxxxxxxxxxxxxxxxxx",
+  "feedUrlPath": "/rss/feed_xxxxxxxxxxxxxxxxxxxxx.xml",
+  "createdAt": "2026-05-18T14:21:00.000Z"
+}
+```
+
+#### 说明
+
+- `apiKey` 用于后续所有 JSON API
+- `feedToken` 用于拼接 RSS URL
+- 当前实现允许公开调用注册接口
+- 如果后续不希望任意注册，建议再加一层后台控制或管理密钥
+
+#### cURL 示例
+
+```bash
+curl -sS -X POST "https://x2api-service.vercel.app/api/client/register" \
+  -H "Content-Type: application/json" \
+  --data '{"label":"ios-ghostbrowser"}'
+```
+
+## 7. 订阅管理接口
+
+以下接口都需要 `apiKey`。
+
+推荐先设置环境变量：
+
+```bash
+export X2API_BASE="https://x2api-service.vercel.app"
+export X2API_KEY="x2d_your_api_key"
+```
+
+### 7.1 查询订阅
+
+#### `GET /api/subscriptions`
+
+返回当前客户端的订阅列表。
+
+#### 请求示例
+
+```bash
+curl -sS "$X2API_BASE/api/subscriptions" \
+  -H "Authorization: Bearer $X2API_KEY"
+```
+
+#### 成功响应 `200`
+
+```json
+{
+  "subscriptions": [
+    {
+      "id": "sub-uuid",
+      "targetId": "target-uuid",
+      "target": "search:特朗普",
+      "kind": "keyword",
+      "value": "特朗普",
+      "createdAt": "2026-05-18T14:30:00.000Z"
+    },
+    {
+      "id": "sub-uuid-2",
+      "targetId": "target-uuid-2",
+      "target": "elonmusk",
+      "kind": "user",
+      "value": "elonmusk",
+      "createdAt": "2026-05-18T14:31:00.000Z"
+    }
+  ]
+}
+```
+
+### 7.2 覆盖订阅列表
+
+#### `PUT /api/subscriptions`
+
+用新的订阅数组整体替换原有订阅。
+
+#### 请求体
+
+```json
+{
+  "targets": ["search:特朗普", "search:马斯克", "elonmusk"]
+}
+```
+
+#### cURL 示例
+
+```bash
+curl -sS -X PUT "$X2API_BASE/api/subscriptions" \
+  -H "Authorization: Bearer $X2API_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{"targets":["search:特朗普","search:马斯克","elonmusk"]}'
+```
+
+#### 成功响应
+
+返回替换后的完整订阅列表：
+
+```json
+{
+  "subscriptions": [
+    {
+      "id": "sub-uuid",
+      "targetId": "target-uuid",
+      "target": "search:特朗普",
+      "kind": "keyword",
+      "value": "特朗普",
+      "createdAt": "2026-05-18T14:30:00.000Z"
+    }
+  ]
+}
+```
+
+#### 说明
+
+- 如果传空数组，会清空当前订阅
+- 服务端会自动去重
+
+### 7.3 增量新增订阅
+
+#### `POST /api/subscriptions`
+
+在现有订阅基础上新增目标。
+
+#### 请求体
+
+```json
+{
+  "targets": ["search:黑料", "realDonaldTrump"]
+}
+```
+
+#### cURL 示例
+
+```bash
+curl -sS -X POST "$X2API_BASE/api/subscriptions" \
+  -H "Authorization: Bearer $X2API_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{"targets":["search:黑料","realDonaldTrump"]}'
+```
+
+#### 说明
+
+- 已存在的目标不会重复创建
+- 返回值是新增后的完整订阅列表
+
+### 7.4 增量删除订阅
+
+#### `DELETE /api/subscriptions`
+
+从当前订阅中移除指定目标。
+
+#### 请求体
+
+```json
+{
+  "targets": ["search:黑料", "realDonaldTrump"]
+}
+```
+
+#### cURL 示例
+
+```bash
+curl -sS -X DELETE "$X2API_BASE/api/subscriptions" \
+  -H "Authorization: Bearer $X2API_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{"targets":["search:黑料","realDonaldTrump"]}'
+```
+
+#### 说明
+
+- 删除不存在的目标时，接口仍会返回当前最新订阅列表
+
+## 8. 内容查询接口
+
+### `GET /api/items`
+
+查询当前客户端订阅范围内的抓取内容。
+
+#### 请求头
+
+需要 `apiKey`。
+
+#### 查询参数
+
+- `limit`
+  - 可选
+  - 返回条数
+  - 默认 `20`
+  - 范围 `1-100`
+- `target`
+  - 可选
+  - 按目标精确过滤
+  - 例如 `search:特朗普` 或 `elonmusk`
+- `keyword`
+  - 可选
+  - 在内容、原文、翻译、作者字段里模糊搜索
+- `since`
+  - 可选
+  - 只返回 `stored_at >= since` 的记录
+  - 建议传 ISO8601 时间
+
+#### 请求示例
+
+```bash
+curl -sS "$X2API_BASE/api/items?limit=10" \
+  -H "Authorization: Bearer $X2API_KEY"
+```
+
+按目标过滤：
+
+```bash
+curl -sS "$X2API_BASE/api/items?target=search:%E7%89%B9%E6%9C%97%E6%99%AE&limit=10" \
+  -H "Authorization: Bearer $X2API_KEY"
+```
+
+按关键词过滤：
+
+```bash
+curl -sS "$X2API_BASE/api/items?keyword=%E9%80%89%E4%B8%BE&limit=10" \
+  -H "Authorization: Bearer $X2API_KEY"
+```
+
+按时间过滤：
+
+```bash
+curl -sS "$X2API_BASE/api/items?since=2026-05-18T00:00:00.000Z&limit=20" \
+  -H "Authorization: Bearer $X2API_KEY"
+```
+
+#### 成功响应 `200`
+
+```json
+{
+  "items": [
+    {
+      "id": "item-uuid",
+      "target": "search:特朗普",
+      "kind": "keyword",
+      "author": "some_author",
+      "title": null,
+      "content": "抓取后的主内容",
+      "rawContent": "原始内容",
+      "translatedContent": "翻译内容",
+      "link": "https://nitter.example/xxx",
+      "xUrl": "https://x.com/xxx/status/123",
+      "images": [
+        "https://image.example/1.jpg"
+      ],
+      "videoUrl": null,
+      "publishedAt": "2026-05-18T14:20:00.000Z",
+      "storedAt": "2026-05-18T14:21:10.000Z",
+      "guid": "1891234567890123456",
+      "isRetweet": false
+    }
+  ]
+}
+```
+
+#### 字段说明
+
+- `target`
+  - 当前命中的订阅目标
+- `kind`
+  - `user` 或 `keyword`
+- `content`
+  - 主内容
+- `rawContent`
+  - 原始内容
+- `translatedContent`
+  - 翻译内容
+- `link`
+  - 来源页链接，通常是镜像页
+- `xUrl`
+  - 原始 X 链接
+- `images`
+  - 图片 URL 数组
+- `videoUrl`
+  - 视频 URL
+- `publishedAt`
+  - 原始发布时间
+- `storedAt`
+  - 写入数据库时间
+- `guid`
+  - 原始内容唯一标识
+
+#### 排序规则
+
+按以下顺序倒序返回：
+
+1. `publishedAt`
+2. `storedAt`
+
+## 9. RSS 订阅接口
+
+### `GET /rss/{feedToken}.xml`
+
+返回当前客户端的聚合 RSS 订阅流。
+
+#### 鉴权方式
+
+- 不需要 `apiKey`
+- `feedToken` 本身就是访问凭证
+
+#### 查询参数
+
+- `limit`
+  - 可选
+  - 默认 `50`
+  - 范围 `1-100`
+
+#### URL 示例
+
+```text
+https://x2api-service.vercel.app/rss/feed_xxxxxxxxxxxxxxxxxxxxx.xml
+```
+
+带条数限制：
+
+```text
+https://x2api-service.vercel.app/rss/feed_xxxxxxxxxxxxxxxxxxxxx.xml?limit=20
+```
+
+#### cURL 示例
+
+```bash
+curl -sS "https://x2api-service.vercel.app/rss/feed_xxxxxxxxxxxxxxxxxxxxx.xml?limit=20"
+```
+
+#### 响应头
+
+```http
+Content-Type: application/rss+xml; charset=utf-8
+Cache-Control: s-maxage=300, stale-while-revalidate=300
+```
+
+#### RSS 输出说明
+
+每条 `<item>` 主要包含：
+
+- `<title>`
+  - 优先使用抓取内容标题
+  - 没有标题时使用 `{target} update`
+- `<link>`
+  - 优先使用 `xUrl`
+  - 其次使用 `link`
+- `<guid>`
+  - 由 `target + guid` 组合
+- `<pubDate>`
+  - 使用 `publishedAt`，没有则退回 `storedAt`
+- `<description>`
+  - 包含作者、订阅目标和正文摘要
+
+#### RSS 示例
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>x2ding feed feed_xxxxx</title>
+    <description>x2ding aggregated subscription feed</description>
+    <lastBuildDate>Mon, 18 May 2026 14:30:00 GMT</lastBuildDate>
+    <generator>x2ding</generator>
+    <item>
+      <title>search:特朗普 update</title>
+      <link>https://x.com/xxx/status/123</link>
+      <guid isPermaLink="false">search:特朗普:1891234567890123456</guid>
+      <pubDate>Mon, 18 May 2026 14:20:00 GMT</pubDate>
+      <description>Author: some_author ...</description>
+    </item>
+  </channel>
+</rss>
+```
+
+### 9.1 RSS 的接入建议
+
+适合：
+
+- RSS 阅读器
+- 自动化通知桥接
+- 第三方订阅系统
+- 不需要复杂交互的只读消费端
+
+不太适合：
+
+- 需要增删订阅的 App 主交互
+- 需要本地状态同步的客户端
+- 需要精细筛选、分页、去重控制的原生应用
+
+更推荐的方式：
+
+- App 主业务走 JSON API
+- RSS 作为导出能力或兼容能力
+
+## 10. 推荐接入流程
+
+### 10.1 App / 客户端
+
+1. 调用 `POST /api/client/register`
+2. 保存 `apiKey` 到安全存储
+3. 保存 `feedToken` 或完整 RSS URL
+4. 用 `PUT /api/subscriptions` 初始化订阅
+5. 用 `GET /api/items` 拉取最新内容
+6. 如果需要开放给 RSS 阅读器，再展示 RSS URL
+
+### 10.2 第三方 RSS 阅读器
+
+1. 后台先创建客户端
+2. 后台写入订阅
+3. 将 `/rss/{feedToken}.xml` 提供给 RSS 阅读器
+
+## 11. 实际 cURL 样例
+
+### 11.1 注册客户端
+
+```bash
+curl -sS -X POST "https://x2api-service.vercel.app/api/client/register" \
+  -H "Content-Type: application/json" \
+  --data '{"label":"demo-client"}'
+```
+
+### 11.2 设置订阅
+
+```bash
+curl -sS -X PUT "https://x2api-service.vercel.app/api/subscriptions" \
+  -H "Authorization: Bearer x2d_your_api_key" \
+  -H "Content-Type: application/json" \
+  --data '{"targets":["search:特朗普","search:马斯克","search:黑料"]}'
+```
+
+### 11.3 查询内容
+
+```bash
+curl -sS "https://x2api-service.vercel.app/api/items?limit=10" \
+  -H "Authorization: Bearer x2d_your_api_key"
+```
+
+### 11.4 查看 RSS
+
+```bash
+curl -sS "https://x2api-service.vercel.app/rss/feed_xxxxxxxxxxxxxxxxxxxxx.xml"
+```
+
+## 12. 当前实现边界
+
+### 12.1 优点
+
+- 架构简单
+- 易部署
+- API key 模式适合匿名客户端
+- RSS 天然兼容外部生态
+
+### 12.2 当前限制
+
+- 采集稳定性依赖第三方 Nitter/X 来源
+- 当前没有传统登录、权限分级和配额体系
+- 当前没有分页接口，`/api/items` 主要适合最近数据查询
+- RSS URL 若泄漏，任何拿到链接的人都可以读取该客户端订阅流
+- `POST /api/client/register` 当前默认开放
+
+## 13. 建议的后续增强
+
+- 增加客户端禁用、轮换 `apiKey`、轮换 `feedToken`
+- 增加管理后台或管理员接口
+- 增加分页与游标查询
+- 增加 Webhook / Push 推送
+- 增加订阅分组与标签
+- 为开放注册增加简单风控或管理令牌
+
+## 14. 代码对应位置
+
+- 服务端路由：
+  - `service/src/app/api/client/register/route.ts`
+  - `service/src/app/api/subscriptions/route.ts`
+  - `service/src/app/api/items/route.ts`
+  - `service/src/app/rss/[feedToken]/route.ts`
+- 鉴权：
+  - `service/src/lib/auth.ts`
+- 订阅逻辑：
+  - `service/src/lib/subscription-service.ts`
+- 查询逻辑：
+  - `service/src/lib/item-service.ts`
+- RSS 生成：
+  - `service/src/lib/rss.ts`
+- 数据库结构：
+  - `shared/schema.sql`

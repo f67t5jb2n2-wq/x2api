@@ -16,6 +16,17 @@ function buildDescription(item: ItemRecord) {
     item.content || item.rawContent || item.translatedContent || "",
   ].filter(Boolean);
 
+  if (item.images.length > 0) {
+    lines.push("", "Images:");
+    for (const image of item.images) {
+      lines.push(image);
+    }
+  }
+
+  if (item.videoUrl) {
+    lines.push("", `Video: ${item.videoUrl}`);
+  }
+
   return escapeXml(lines.join("\n\n"));
 }
 

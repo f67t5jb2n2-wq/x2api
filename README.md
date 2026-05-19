@@ -33,6 +33,7 @@ psql "$DATABASE_URL" -f shared/schema.sql
 如果你使用 Neon / Supabase，把 `DATABASE_URL` 分别配置到：
 
 - GitHub Actions secret: `DATABASE_URL`
+- GitHub Actions secret: `IMGBB_API_KEY`
 - Vercel project env: `DATABASE_URL`
 
 ## 本地运行

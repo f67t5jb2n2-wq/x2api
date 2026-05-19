@@ -40,6 +40,7 @@ jobs:
         working-directory: collector
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
           RETENTION_DAYS: '30'
           MAX_RECORDS: '5000'
         run: python twitter_monitor.py monitor

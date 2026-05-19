@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import random
@@ -26,6 +27,7 @@ INSTANCES_FILE = PROJECT_ROOT / "instances.json"
 DEFAULT_RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 DEFAULT_MAX_RECORDS = int(os.environ.get("MAX_RECORDS", "2000"))
 AUTO_TRANSLATE = os.environ.get("TRANSLATE_CONTENT", "false").lower() == "true"
+IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY", "").strip()
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
@@ -242,6 +244,71 @@ def get_original_image_url(nitter_url: str) -> str:
         print(f"[图片解析] 还原 URL 失败 {nitter_url}: {exc}")
 
     return nitter_url
+
+
+def upload_to_imgbb(image_url: str) -> str | None:
+    if not IMGBB_API_KEY:
+        return None
+
+    try:
+        print(f"[图床] 正在从 {image_url} 下载图片...")
+        img_response = requests.get(
+            image_url,
+            timeout=30,
+            headers={
+                "User-Agent": get_random_user_agent(),
+                "Referer": "https://twitter.com/",
+            },
+        )
+        img_response.raise_for_status()
+
+        image_base64 = base64.b64encode(img_response.content).decode("utf-8")
+        print("[图床] 正在上传到 ImgBB...")
+        upload_response = requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={
+                "key": IMGBB_API_KEY,
+                "image": image_base64,
+            },
+            timeout=30,
+        )
+        upload_response.raise_for_status()
+        payload = upload_response.json()
+        if payload.get("success") and payload.get("data", {}).get("url"):
+            uploaded_url = payload["data"]["url"]
+            print(f"[图床] ImgBB 上传成功: {uploaded_url}")
+            return uploaded_url
+
+        print(f"[图床] ImgBB 上传失败: {payload}")
+    except Exception as exc:
+        print(f"[图床] ImgBB 上传异常: {exc}")
+
+    return None
+
+
+def rewrite_images_with_imgbb(tweets: list[dict]) -> None:
+    if not IMGBB_API_KEY:
+        return
+
+    uploaded_cache: dict[str, str] = {}
+    for tweet in tweets:
+        images = tweet.get("images") or []
+        if not images:
+            continue
+
+        rewritten_images: list[str] = []
+        for image_url in images:
+            cached = uploaded_cache.get(image_url)
+            if cached:
+                rewritten_images.append(cached)
+                continue
+
+            uploaded = upload_to_imgbb(image_url)
+            final_url = uploaded or image_url
+            uploaded_cache[image_url] = final_url
+            rewritten_images.append(final_url)
+
+        tweet["images"] = rewritten_images
 
 
 def translate_text(text: str, target_lang: str = "zh-CN") -> str | None:
@@ -609,6 +676,9 @@ def insert_items(conn, target_row: dict, tweets: list[dict], previous_id: str | 
         if previous_id and tweet["guid"] == previous_id:
             break
         pending_records.append(tweet)
+
+    if pending_records:
+        rewrite_images_with_imgbb(pending_records)
 
     inserted = 0
     with conn.cursor() as cur:

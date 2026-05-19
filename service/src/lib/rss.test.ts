@@ -29,3 +29,30 @@ test("buildFeedXml creates RSS output", () => {
   assert.match(xml, /<title>New post<\/title>/);
   assert.match(xml, /<guid isPermaLink="false">OpenAI:1<\/guid>/);
 });
+
+test("buildFeedXml includes image and video links in description", () => {
+  const xml = buildFeedXml("feed_1234567890", [
+    {
+      id: "item-2",
+      target: "search:AI",
+      kind: "keyword",
+      author: "OpenAI",
+      title: "Media post",
+      content: "With media",
+      rawContent: null,
+      translatedContent: null,
+      link: "https://example.com/nitter",
+      xUrl: "https://x.com/openai/status/2",
+      images: ["https://i.imgbb.com/example.jpg"],
+      videoUrl: "https://video.example/test.mp4",
+      publishedAt: "2026-05-18T10:00:00.000Z",
+      storedAt: "2026-05-18T10:00:10.000Z",
+      guid: "2",
+      isRetweet: false,
+    },
+  ]);
+
+  assert.match(xml, /Images:/);
+  assert.match(xml, /https:\/\/i\.imgbb\.com\/example\.jpg/);
+  assert.match(xml, /Video: https:\/\/video\.example\/test\.mp4/);
+});

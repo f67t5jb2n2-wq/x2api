@@ -156,6 +156,52 @@ def load_instances():
     return NITTER_INSTANCES
 
 
+def normalize_instance_config(instances: list[object]) -> list[dict[str, object]]:
+    normalized_instances: list[dict[str, object]] = []
+    for item in instances:
+        if isinstance(item, str):
+            url = item.rstrip("/")
+            if not url:
+                continue
+            normalized_instances.append({"url": url, "priority": 0})
+            continue
+
+        if isinstance(item, dict):
+            raw_url = item.get("url")
+            if not isinstance(raw_url, str):
+                continue
+            url = raw_url.rstrip("/")
+            if not url:
+                continue
+
+            raw_priority = item.get("priority", 0)
+            try:
+                priority = int(raw_priority)
+            except (TypeError, ValueError):
+                priority = 0
+
+            normalized_instances.append({"url": url, "priority": priority})
+
+    return normalized_instances
+
+
+def order_instances_for_attempts(
+    instances: list[object],
+    runtime_penalties: dict[str, int] | None = None,
+) -> list[str]:
+    runtime_penalties = runtime_penalties or {}
+    normalized_instances = normalize_instance_config(instances)
+
+    # Lower score wins: explicit priority first, then runtime 403 penalties.
+    for item in normalized_instances:
+        url = str(item["url"])
+        item["sort_score"] = int(item["priority"]) + runtime_penalties.get(url, 0)
+        item["shuffle_key"] = random.random()
+
+    normalized_instances.sort(key=lambda item: (int(item["sort_score"]), float(item["shuffle_key"])))
+    return [str(item["url"]) for item in normalized_instances]
+
+
 def get_random_user_agent():
     ua_list = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -231,7 +277,11 @@ def nitter_to_x_url(nitter_url: str) -> str:
     return urlunparse(("https", "x.com", parsed.path, "", parsed.query, ""))
 
 
-def scrape_nitter_with_playwright(target: str, dynamic_instances: list[str] | None = None) -> list[dict]:
+def scrape_nitter_with_playwright(
+    target: str,
+    dynamic_instances: list[str] | None = None,
+    runtime_penalties: dict[str, int] | None = None,
+) -> list[dict]:
     try:
         from playwright.sync_api import sync_playwright
         from playwright_stealth import stealth_sync
@@ -242,15 +292,7 @@ def scrape_nitter_with_playwright(target: str, dynamic_instances: list[str] | No
     is_search = target.startswith("search:")
     keyword = target[7:] if is_search else target
 
-    instances = list(dynamic_instances or NITTER_INSTANCES)
-    if len(instances) > 5:
-        top_5 = instances[:5]
-        random.shuffle(top_5)
-        others = instances[5:]
-        random.shuffle(others)
-        instances = top_5 + others
-    else:
-        random.shuffle(instances)
+    instances = list(dynamic_instances or order_instances_for_attempts(list(dynamic_instances or NITTER_INSTANCES)))
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -274,6 +316,8 @@ def scrape_nitter_with_playwright(target: str, dynamic_instances: list[str] | No
                     response = page.goto(url, wait_until="networkidle", timeout=45000)
                     if response and response.status == 403:
                         print(f"[{target}] 访问 {instance} 被拒 (403 Forbidden)")
+                        if runtime_penalties is not None:
+                            runtime_penalties[instance] = runtime_penalties.get(instance, 0) + 100
                         context.close()
                         context = None
                         continue
@@ -811,6 +855,7 @@ def command_register_client(args) -> int:
 
 def command_monitor(args) -> int:
     instances = load_instances()
+    runtime_penalties: dict[str, int] = {}
     retention_days = args.retention_days if args.retention_days is not None else DEFAULT_RETENTION_DAYS
     max_records = args.max_records if args.max_records is not None else DEFAULT_MAX_RECORDS
 
@@ -830,7 +875,8 @@ def command_monitor(args) -> int:
             target = format_target(target_row["kind"], target_row["value"])
             previous_id = target_row.get("last_guid")
             try:
-                tweets = scrape_nitter_with_playwright(target, instances)
+                ordered_instances = order_instances_for_attempts(instances, runtime_penalties)
+                tweets = scrape_nitter_with_playwright(target, ordered_instances, runtime_penalties)
                 if not tweets:
                     upsert_crawl_state(conn, target_row["id"], last_guid=previous_id, last_error="No tweets returned.", success=False)
                     conn.commit()

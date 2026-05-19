@@ -7,6 +7,11 @@ PROJECT_ROOT = os.path.dirname(BASE_DIR)
 OUTPUT_FILE = os.path.join(PROJECT_ROOT, 'instances.json')
 API_URL = "https://status.d420.de/api/v1/instances"
 
+DEFAULT_PRIORITY = 0
+INSTANCE_PRIORITY_OVERRIDES = {
+    "https://lightbrd.com": 100,
+}
+
 def fetch_and_save():
     print(f"正在从 {API_URL} 获取实例状态...")
     try:
@@ -28,13 +33,18 @@ def fetch_and_save():
         # 按分数从高到低排列
         healthy_hosts.sort(key=lambda x: x['points'], reverse=True)
         
-        # 提取纯 URL 列表
-        instance_urls = [h['url'] for h in healthy_hosts]
-        
-        if instance_urls:
+        instance_configs = [
+            {
+                "url": h["url"],
+                "priority": INSTANCE_PRIORITY_OVERRIDES.get(h["url"], DEFAULT_PRIORITY),
+            }
+            for h in healthy_hosts
+        ]
+
+        if instance_configs:
             with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-                json.dump(instance_urls, f, indent=2, ensure_ascii=False)
-            print(f"成功更新 {len(instance_urls)} 个健康实例到 {OUTPUT_FILE}")
+                json.dump(instance_configs, f, indent=2, ensure_ascii=False)
+            print(f"成功更新 {len(instance_configs)} 个健康实例到 {OUTPUT_FILE}")
             return True
         else:
             print("未能获取到任何健康实例")

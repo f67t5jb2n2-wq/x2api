@@ -31,6 +31,11 @@ AUTO_TRANSLATE = os.environ.get("TRANSLATE_CONTENT", "false").lower() == "true"
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY", "").strip()
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+VIDEO_THUMB_PREFIXES = (
+    "amplify_video_thumb",
+    "ext_tw_video_thumb",
+    "tweet_video_thumb",
+)
 
 NITTER_INSTANCES = [
     "https://xcancel.com",
@@ -267,6 +272,11 @@ def get_original_image_url(nitter_url: str) -> str:
                 media_id, ext = media_part.rsplit(".", 1)
                 ext = ext.split("&")[0].split("?")[0]
                 return f"https://pbs.twimg.com/media/{media_id}?format={ext}&name=large"
+
+        for prefix in VIDEO_THUMB_PREFIXES:
+            match = re.search(rf"(?:/pic/)?({prefix}/[^#]+)", path)
+            if match:
+                return f"https://pbs.twimg.com/{match.group(1)}"
 
         match = re.search(r"(pbs\.twimg\.com/media/[^?&]+)", path)
         if match:

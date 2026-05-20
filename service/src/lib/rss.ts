@@ -44,7 +44,7 @@ export function buildFeedXml(feedToken: string, items: ItemRecord[]) {
       return `<item>
   <title>${title}</title>
   <link>${escapeXml(link)}</link>
-  <guid isPermaLink="false">${escapeXml(`${item.target}:${item.guid}`)}</guid>
+  <guid isPermaLink="false">${escapeXml(item.guid)}</guid>
   <pubDate>${escapeXml(pubDate)}</pubDate>
   <description>${description}</description>
 </item>`;

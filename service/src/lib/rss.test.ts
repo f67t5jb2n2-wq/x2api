@@ -28,7 +28,7 @@ test("buildFeedXml creates RSS output", () => {
 
   assert.match(xml, /<rss version="2.0">/);
   assert.match(xml, /<title>New post<\/title>/);
-  assert.match(xml, /<guid isPermaLink="false">OpenAI:1<\/guid>/);
+  assert.match(xml, /<guid isPermaLink="false">1<\/guid>/);
 });
 
 test("buildFeedXml includes image and video links in description", () => {

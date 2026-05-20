@@ -72,7 +72,35 @@ export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
   const searchText = query.keyword?.trim() ? `%${query.keyword.trim().toLowerCase()}%` : null;
   const targetFilter = query.target?.trim().toLowerCase() || null;
   const sinceFilter = query.since ? new Date(query.since).toISOString() : null;
-  const filters = sql`
+  const visibleItems = sql`
+    SELECT
+      i.id,
+      CASE
+        WHEN t.kind = 'keyword' THEN 'search:' || t.value
+        ELSE t.value
+      END AS target,
+      t.kind,
+      i.author,
+      i.fullname,
+      i.title,
+      i.content,
+      i.raw_content AS "rawContent",
+      i.translated_content AS "translatedContent",
+      i.link,
+      i.x_url AS "xUrl",
+      ARRAY(
+        SELECT jsonb_array_elements_text(i.images)
+      ) AS images,
+      i.video_url AS "videoUrl",
+      i.published_at AS "publishedAt",
+      i.stored_at AS "storedAt",
+      COALESCE(i.published_at, i.stored_at) AS "sortTime",
+      i.guid,
+      i.is_retweet AS "isRetweet",
+      ROW_NUMBER() OVER (
+        PARTITION BY i.guid
+        ORDER BY COALESCE(i.published_at, i.stored_at) DESC, i.stored_at DESC, i.id DESC
+      ) AS "dedupeRank"
     FROM subscriptions s
     INNER JOIN targets t ON t.id = s.target_id
     INNER JOIN items i ON i.target_id = t.id
@@ -97,49 +125,52 @@ export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
         ${sinceFilter}::timestamptz IS NULL
         OR i.stored_at >= ${sinceFilter}::timestamptz
       )
-      AND (
-        ${cursor?.sortTime ?? null}::timestamptz IS NULL
-        OR (
-          ROW(
-            COALESCE(i.published_at, i.stored_at),
-            i.stored_at,
-            i.id
-          ) < ROW(
-            ${cursor?.sortTime ?? null}::timestamptz,
-            ${cursor?.storedAt ?? null}::timestamptz,
-            ${cursor?.id ?? null}::uuid
-          )
-        )
-      )
   `;
 
   const rows = asRows<ItemRow>(await sql`
+    WITH visible_items AS (
+      ${visibleItems}
+    ),
+    deduped_items AS (
+      SELECT *
+      FROM visible_items
+      WHERE "dedupeRank" = 1
+    )
     SELECT
-      i.id,
-      CASE
-        WHEN t.kind = 'keyword' THEN 'search:' || t.value
-        ELSE t.value
-      END AS target,
-      t.kind,
-      i.author,
-      i.fullname,
-      i.title,
-      i.content,
-      i.raw_content AS "rawContent",
-      i.translated_content AS "translatedContent",
-      i.link,
-      i.x_url AS "xUrl",
-      ARRAY(
-        SELECT jsonb_array_elements_text(i.images)
-      ) AS images,
-      i.video_url AS "videoUrl",
-      i.published_at AS "publishedAt",
-      i.stored_at AS "storedAt",
-      COALESCE(i.published_at, i.stored_at) AS "sortTime",
-      i.guid,
-      i.is_retweet AS "isRetweet"
-    ${filters}
-    ORDER BY "sortTime" DESC, "storedAt" DESC, i.id DESC
+      id,
+      target,
+      kind,
+      author,
+      fullname,
+      title,
+      content,
+      "rawContent",
+      "translatedContent",
+      link,
+      "xUrl",
+      images,
+      "videoUrl",
+      "publishedAt",
+      "storedAt",
+      "sortTime",
+      guid,
+      "isRetweet"
+    FROM deduped_items
+    WHERE (
+      ${cursor?.sortTime ?? null}::timestamptz IS NULL
+      OR (
+        ROW(
+          "sortTime",
+          "storedAt",
+          id
+        ) < ROW(
+          ${cursor?.sortTime ?? null}::timestamptz,
+          ${cursor?.storedAt ?? null}::timestamptz,
+          ${cursor?.id ?? null}::uuid
+        )
+      )
+    )
+    ORDER BY "sortTime" DESC, "storedAt" DESC, id DESC
     LIMIT ${limit + 1}
   `);
 
@@ -168,36 +199,67 @@ export async function listItemsByFeedToken(feedToken: string, limit = 50) {
   const normalizedLimit = normalizeLimit(limit);
 
   const rows = asRows<ItemRecord>(await sql`
+    WITH visible_items AS (
+      SELECT
+        i.id,
+        CASE
+          WHEN t.kind = 'keyword' THEN 'search:' || t.value
+          ELSE t.value
+        END AS target,
+        t.kind,
+        i.author,
+        i.fullname,
+        i.title,
+        i.content,
+        i.raw_content AS "rawContent",
+        i.translated_content AS "translatedContent",
+        i.link,
+        i.x_url AS "xUrl",
+        ARRAY(
+          SELECT jsonb_array_elements_text(i.images)
+        ) AS images,
+        i.video_url AS "videoUrl",
+        i.published_at AS "publishedAt",
+        i.stored_at AS "storedAt",
+        COALESCE(i.published_at, i.stored_at) AS "sortTime",
+        i.guid,
+        i.is_retweet AS "isRetweet",
+        ROW_NUMBER() OVER (
+          PARTITION BY i.guid
+          ORDER BY COALESCE(i.published_at, i.stored_at) DESC, i.stored_at DESC, i.id DESC
+        ) AS "dedupeRank"
+      FROM clients c
+      INNER JOIN subscriptions s ON s.client_id = c.id
+      INNER JOIN targets t ON t.id = s.target_id
+      INNER JOIN items i ON i.target_id = t.id
+      WHERE c.feed_token = ${feedToken}
+        AND c.status = 'active'
+    ),
+    deduped_items AS (
+      SELECT *
+      FROM visible_items
+      WHERE "dedupeRank" = 1
+    )
     SELECT
-      i.id,
-      CASE
-        WHEN t.kind = 'keyword' THEN 'search:' || t.value
-        ELSE t.value
-      END AS target,
-      t.kind,
-      i.author,
-      i.fullname,
-      i.title,
-      i.content,
-      i.raw_content AS "rawContent",
-      i.translated_content AS "translatedContent",
-      i.link,
-      i.x_url AS "xUrl",
-      ARRAY(
-        SELECT jsonb_array_elements_text(i.images)
-      ) AS images,
-      i.video_url AS "videoUrl",
-      i.published_at AS "publishedAt",
-      i.stored_at AS "storedAt",
-      i.guid,
-      i.is_retweet AS "isRetweet"
-    FROM clients c
-    INNER JOIN subscriptions s ON s.client_id = c.id
-    INNER JOIN targets t ON t.id = s.target_id
-    INNER JOIN items i ON i.target_id = t.id
-    WHERE c.feed_token = ${feedToken}
-      AND c.status = 'active'
-    ORDER BY COALESCE(i.published_at, i.stored_at) DESC, i.stored_at DESC
+      id,
+      target,
+      kind,
+      author,
+      fullname,
+      title,
+      content,
+      "rawContent",
+      "translatedContent",
+      link,
+      "xUrl",
+      images,
+      "videoUrl",
+      "publishedAt",
+      "storedAt",
+      guid,
+      "isRetweet"
+    FROM deduped_items
+    ORDER BY "sortTime" DESC, "storedAt" DESC, id DESC
     LIMIT ${normalizedLimit}
   `);
 

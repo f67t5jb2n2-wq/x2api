@@ -935,16 +935,53 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
         before_count = cur.fetchone()["count"]
 
         threshold = now_utc() - timedelta(days=retention_days)
-        cur.execute("DELETE FROM items WHERE stored_at < %s", (threshold,))
+        cur.execute(
+            """
+            DELETE FROM items i
+            WHERE i.stored_at < %s
+              AND (
+                i.video_url IS NULL
+                OR NOT EXISTS (
+                  SELECT 1
+                  FROM video_stats vs
+                  WHERE vs.item_id = i.id
+                    AND vs.score >= 20
+                )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM target_profiles tp
+                WHERE tp.target_id = i.target_id
+                  AND tp.is_public_pool = TRUE
+              )
+            """,
+            (threshold,),
+        )
 
         if max_records > 0:
             cur.execute(
                 """
-                WITH doomed AS (
+                WITH ranked_items AS (
+                    SELECT
+                        i.id,
+                        ROW_NUMBER() OVER (
+                            ORDER BY
+                                CASE
+                                  WHEN i.video_url IS NOT NULL AND COALESCE(vs.score, 0) >= 20 THEN 1
+                                  WHEN i.video_url IS NOT NULL AND COALESCE(tp.is_public_pool, FALSE) THEN 2
+                                  WHEN i.video_url IS NOT NULL THEN 3
+                                  ELSE 4
+                                END,
+                                i.stored_at DESC
+                        ) AS keep_rank
+                    FROM items i
+                    LEFT JOIN video_stats vs ON vs.item_id = i.id
+                    LEFT JOIN target_profiles tp ON tp.target_id = i.target_id
+                ),
+                doomed AS (
                     SELECT id
-                    FROM items
-                    ORDER BY stored_at DESC
-                    OFFSET %s
+                    FROM ranked_items
+                    WHERE keep_rank > %s
                 )
                 DELETE FROM items
                 WHERE id IN (SELECT id FROM doomed)

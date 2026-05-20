@@ -7,12 +7,21 @@ from psycopg import connect
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Clean short-lived video feed data for small PostgreSQL plans.")
+    parser = argparse.ArgumentParser(description="Clean video feed data with tiered retention for small PostgreSQL plans.")
     parser.add_argument("--apply", action="store_true", help="Delete rows. Without this flag, only report counts.")
-    parser.add_argument("--event-days", type=int, default=7)
-    parser.add_argument("--non-video-days", type=int, default=14)
-    parser.add_argument("--video-days", type=int, default=30)
+    parser.add_argument("--event-days", type=int, default=7, help="Detailed feed event retention days.")
+    parser.add_argument("--non-video-days", type=int, default=14, help="Non-video item retention days.")
+    parser.add_argument("--low-score-video-days", type=int, default=7, help="Retention days for low-score videos.")
+    parser.add_argument("--video-days", type=int, default=30, help="Default video item retention days.")
+    parser.add_argument("--public-video-days", type=int, default=60, help="Public pool video retention days.")
+    parser.add_argument("--high-score-video-days", type=int, default=90, help="High-score video retention days.")
+    parser.add_argument("--high-score-threshold", type=int, default=20, help="Score threshold for high-score videos.")
+    parser.add_argument("--low-score-threshold", type=int, default=-5, help="Score threshold for low-score videos.")
     return parser.parse_args()
+
+
+def interval_param(days: int) -> tuple[int]:
+    return (max(days, 1),)
 
 
 def main() -> int:
@@ -26,7 +35,27 @@ def main() -> int:
             "feed_events",
             "DELETE FROM feed_events WHERE created_at < NOW() - (%s || ' days')::interval",
             "SELECT COUNT(*) FROM feed_events WHERE created_at < NOW() - (%s || ' days')::interval",
-            (max(args.event_days, 1),),
+            interval_param(args.event_days),
+        ),
+        (
+            "low_score_video_items",
+            """
+            DELETE FROM items i
+            USING video_stats vs
+            WHERE vs.item_id = i.id
+              AND i.video_url IS NOT NULL
+              AND i.stored_at < NOW() - (%s || ' days')::interval
+              AND vs.score <= %s
+            """,
+            """
+            SELECT COUNT(*)
+            FROM items i
+            INNER JOIN video_stats vs ON vs.item_id = i.id
+            WHERE i.video_url IS NOT NULL
+              AND i.stored_at < NOW() - (%s || ' days')::interval
+              AND vs.score <= %s
+            """,
+            (max(args.low_score_video_days, 1), args.low_score_threshold),
         ),
         (
             "non_video_items",
@@ -40,21 +69,83 @@ def main() -> int:
             WHERE video_url IS NULL
               AND stored_at < NOW() - (%s || ' days')::interval
             """,
-            (max(args.non_video_days, 1),),
+            interval_param(args.non_video_days),
         ),
         (
-            "video_items",
+            "regular_video_items",
             """
-            DELETE FROM items
-            WHERE video_url IS NOT NULL
-              AND stored_at < NOW() - (%s || ' days')::interval
+            DELETE FROM items i
+            WHERE i.video_url IS NOT NULL
+              AND i.stored_at < NOW() - (%s || ' days')::interval
+              AND COALESCE((SELECT vs.score FROM video_stats vs WHERE vs.item_id = i.id), 0) < %s
+              AND NOT EXISTS (
+                SELECT 1
+                FROM target_profiles tp
+                WHERE tp.target_id = i.target_id
+                  AND tp.is_public_pool = TRUE
+              )
             """,
             """
-            SELECT COUNT(*) FROM items
-            WHERE video_url IS NOT NULL
-              AND stored_at < NOW() - (%s || ' days')::interval
+            SELECT COUNT(*) FROM items i
+            WHERE i.video_url IS NOT NULL
+              AND i.stored_at < NOW() - (%s || ' days')::interval
+              AND COALESCE((SELECT vs.score FROM video_stats vs WHERE vs.item_id = i.id), 0) < %s
+              AND NOT EXISTS (
+                SELECT 1
+                FROM target_profiles tp
+                WHERE tp.target_id = i.target_id
+                  AND tp.is_public_pool = TRUE
+              )
             """,
-            (max(args.video_days, 1),),
+            (max(args.video_days, 1), args.high_score_threshold),
+        ),
+        (
+            "public_video_items",
+            """
+            DELETE FROM items i
+            WHERE i.video_url IS NOT NULL
+              AND i.stored_at < NOW() - (%s || ' days')::interval
+              AND COALESCE((SELECT vs.score FROM video_stats vs WHERE vs.item_id = i.id), 0) < %s
+              AND EXISTS (
+                SELECT 1
+                FROM target_profiles tp
+                WHERE tp.target_id = i.target_id
+                  AND tp.is_public_pool = TRUE
+              )
+            """,
+            """
+            SELECT COUNT(*) FROM items i
+            WHERE i.video_url IS NOT NULL
+              AND i.stored_at < NOW() - (%s || ' days')::interval
+              AND COALESCE((SELECT vs.score FROM video_stats vs WHERE vs.item_id = i.id), 0) < %s
+              AND EXISTS (
+                SELECT 1
+                FROM target_profiles tp
+                WHERE tp.target_id = i.target_id
+                  AND tp.is_public_pool = TRUE
+              )
+            """,
+            (max(args.public_video_days, 1), args.high_score_threshold),
+        ),
+        (
+            "high_score_video_items",
+            """
+            DELETE FROM items i
+            USING video_stats vs
+            WHERE vs.item_id = i.id
+              AND i.video_url IS NOT NULL
+              AND i.stored_at < NOW() - (%s || ' days')::interval
+              AND vs.score >= %s
+            """,
+            """
+            SELECT COUNT(*)
+            FROM items i
+            INNER JOIN video_stats vs ON vs.item_id = i.id
+            WHERE i.video_url IS NOT NULL
+              AND i.stored_at < NOW() - (%s || ' days')::interval
+              AND vs.score >= %s
+            """,
+            (max(args.high_score_video_days, 1), args.high_score_threshold),
         ),
     ]
 

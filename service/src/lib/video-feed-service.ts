@@ -1,5 +1,5 @@
 import { getSql, type QueryChunk } from "@/lib/db";
-import { buildCursorPage, decodeCursor, normalizeLimit } from "@/lib/pagination";
+import { decodeCursor, encodeCursor, normalizeLimit } from "@/lib/pagination";
 import { asRows } from "@/lib/sql-result";
 
 export type VideoFeedSource = "user" | "public" | "mixed";
@@ -42,14 +42,45 @@ export type VideoFeedItem = {
 };
 
 type VideoFeedCursor = {
-  sortTime: string;
-  storedAt: string;
-  id: string;
+  sortTime?: string;
+  storedAt?: string;
+  id?: string;
+  seenIds?: string[];
+  seenGuids?: string[];
+  seenVideoKeys?: string[];
+  lastAuthor?: string | null;
+  lastTarget?: string | null;
 };
 
 type VideoFeedRow = VideoFeedItem & {
+  guid: string;
+  videoKey: string;
   sortTime: string;
 };
+
+type VideoFeedTimeBucket = "recent" | "week" | "older";
+
+type VideoFeedDiversityItem = {
+  id: string;
+  guid?: string | null;
+  videoKey?: string | null;
+  author?: string | null;
+  fullname?: string | null;
+  target: string;
+};
+
+type DiversityState = {
+  ids: Set<string>;
+  guids: Set<string>;
+  videoKeys: Set<string>;
+  authorCounts: Map<string, number>;
+  targetCounts: Map<string, number>;
+  lastAuthor: string | null;
+  lastTarget: string | null;
+};
+
+const MAX_AUTHOR_PER_PAGE = 2;
+const MAX_TARGET_PER_PAGE = 3;
 
 function isVideoFeedCursor(value: unknown): value is VideoFeedCursor {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -57,11 +88,165 @@ function isVideoFeedCursor(value: unknown): value is VideoFeedCursor {
   }
 
   const candidate = value as Partial<VideoFeedCursor>;
-  return (
+  const hasLegacyBoundary =
     typeof candidate.sortTime === "string" &&
     typeof candidate.storedAt === "string" &&
-    typeof candidate.id === "string"
-  );
+    typeof candidate.id === "string";
+
+  const hasSeenIds =
+    Array.isArray(candidate.seenIds) &&
+    candidate.seenIds.every((id) => typeof id === "string") &&
+    (candidate.seenGuids === undefined ||
+      (Array.isArray(candidate.seenGuids) && candidate.seenGuids.every((guid) => typeof guid === "string"))) &&
+    (candidate.seenVideoKeys === undefined ||
+      (Array.isArray(candidate.seenVideoKeys) && candidate.seenVideoKeys.every((key) => typeof key === "string"))) &&
+    (candidate.lastAuthor === undefined || candidate.lastAuthor === null || typeof candidate.lastAuthor === "string") &&
+    (candidate.lastTarget === undefined || candidate.lastTarget === null || typeof candidate.lastTarget === "string");
+
+  return hasLegacyBoundary || hasSeenIds;
+}
+
+function normalizeDiversityKey(value: string | null | undefined) {
+  return value?.trim().toLowerCase() || null;
+}
+
+function getAuthorKey(item: VideoFeedDiversityItem) {
+  return normalizeDiversityKey(item.author) ?? normalizeDiversityKey(item.fullname);
+}
+
+function createDiversityState<T extends VideoFeedDiversityItem>(
+  selected: T[],
+  previousLastAuthor?: string | null,
+  previousLastTarget?: string | null,
+): DiversityState {
+  const state: DiversityState = {
+    ids: new Set<string>(),
+    guids: new Set<string>(),
+    videoKeys: new Set<string>(),
+    authorCounts: new Map<string, number>(),
+    targetCounts: new Map<string, number>(),
+    lastAuthor: normalizeDiversityKey(previousLastAuthor),
+    lastTarget: normalizeDiversityKey(previousLastTarget),
+  };
+
+  for (const item of selected) {
+    addDiversityItem(state, item);
+  }
+
+  return state;
+}
+
+function incrementCount(counts: Map<string, number>, key: string | null) {
+  if (!key) {
+    return;
+  }
+
+  counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+function addDiversityItem(state: DiversityState, item: VideoFeedDiversityItem) {
+  const authorKey = getAuthorKey(item);
+  const targetKey = normalizeDiversityKey(item.target);
+  const guidKey = normalizeDiversityKey(item.guid);
+  const videoKey = normalizeDiversityKey(item.videoKey);
+
+  state.ids.add(item.id);
+  if (guidKey) {
+    state.guids.add(guidKey);
+  }
+  if (videoKey) {
+    state.videoKeys.add(videoKey);
+  }
+  incrementCount(state.authorCounts, authorKey);
+  incrementCount(state.targetCounts, targetKey);
+  state.lastAuthor = authorKey;
+  state.lastTarget = targetKey;
+}
+
+function canSelectDiversityItem(
+  state: DiversityState,
+  item: VideoFeedDiversityItem,
+  options: { enforceLimits: boolean; enforceConsecutive: boolean },
+) {
+  const authorKey = getAuthorKey(item);
+  const targetKey = normalizeDiversityKey(item.target);
+  const guidKey = normalizeDiversityKey(item.guid);
+  const videoKey = normalizeDiversityKey(item.videoKey);
+
+  if (state.ids.has(item.id) || (guidKey && state.guids.has(guidKey)) || (videoKey && state.videoKeys.has(videoKey))) {
+    return false;
+  }
+
+  if (options.enforceConsecutive && ((authorKey && authorKey === state.lastAuthor) || (targetKey && targetKey === state.lastTarget))) {
+    return false;
+  }
+
+  if (!options.enforceLimits) {
+    return true;
+  }
+
+  if (authorKey && (state.authorCounts.get(authorKey) ?? 0) >= MAX_AUTHOR_PER_PAGE) {
+    return false;
+  }
+
+  if (targetKey && (state.targetCounts.get(targetKey) ?? 0) >= MAX_TARGET_PER_PAGE) {
+    return false;
+  }
+
+  return true;
+}
+
+function appendDiverseItems<T extends VideoFeedDiversityItem>(
+  selected: T[],
+  candidates: T[],
+  limit: number,
+  state: DiversityState,
+  options: { enforceLimits: boolean; enforceConsecutive: boolean },
+) {
+  let remaining = candidates;
+  let madeProgress = true;
+
+  while (selected.length < limit && remaining.length > 0 && madeProgress) {
+    madeProgress = false;
+    const nextRemaining: T[] = [];
+
+    for (const item of remaining) {
+      if (selected.length >= limit) {
+        nextRemaining.push(item);
+        continue;
+      }
+
+      if (canSelectDiversityItem(state, item, options)) {
+        selected.push(item);
+        addDiversityItem(state, item);
+        madeProgress = true;
+      } else {
+        nextRemaining.push(item);
+      }
+    }
+
+    remaining = nextRemaining;
+  }
+}
+
+export function selectDiverseVideoItems<T extends VideoFeedDiversityItem>(input: {
+  selected?: T[];
+  candidates: T[];
+  limit: number;
+  previousLastAuthor?: string | null;
+  previousLastTarget?: string | null;
+  enforceLimits?: boolean;
+  enforceConsecutive?: boolean;
+}) {
+  const selected = [...(input.selected ?? [])];
+  const state = createDiversityState(selected, input.previousLastAuthor, input.previousLastTarget);
+
+  appendDiverseItems(selected, input.candidates, input.limit, state, {
+    enforceLimits: input.enforceLimits ?? true,
+    enforceConsecutive: input.enforceConsecutive ?? true,
+  });
+
+  return selected;
 }
 
 function videoKeyExpression(alias: "i" | "watched_item"): QueryChunk {
@@ -113,11 +298,17 @@ export async function listVideoFeed(query: VideoFeedQuery) {
   const source = query.source ?? "mixed";
   const itemVideoKey = videoKeyExpression("i");
   const watchedVideoKey = videoKeyExpression("watched_item");
+  const seenIds = [...new Set(cursor?.seenIds ?? [])];
+  const seenGuids = [...new Set(cursor?.seenGuids ?? [])];
+  const seenVideoKeys = [...new Set(cursor?.seenVideoKeys ?? [])];
+  const candidateLimit = Math.max(limit * 3, 30);
 
-  const rows = asRows<VideoFeedRow>(await sql`
+  const fetchCandidates = async (bucket: VideoFeedTimeBucket) => {
+    const rows = asRows<VideoFeedRow>(await sql`
     WITH candidate_items AS (
       SELECT
         i.id,
+        i.guid,
         i.target_id AS "targetId",
         i.video_url AS "videoUrl",
         ${itemVideoKey} AS "videoKey",
@@ -154,6 +345,30 @@ export async function listVideoFeed(query: VideoFeedQuery) {
       LEFT JOIN video_stats vs ON vs.item_id = i.id
       WHERE i.video_url IS NOT NULL
         AND i.video_url <> ''
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(${JSON.stringify(seenIds)}::jsonb) AS seen_item(id)
+          WHERE seen_item.id = i.id::text
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(${JSON.stringify(seenGuids)}::jsonb) AS seen_guid(guid)
+          WHERE seen_guid.guid = i.guid
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(${JSON.stringify(seenVideoKeys)}::jsonb) AS seen_video_key(video_key)
+          WHERE seen_video_key.video_key = ${itemVideoKey}
+        )
+        AND (
+          (${bucket}::text = 'recent' AND COALESCE(i.published_at, i.stored_at) >= NOW() - INTERVAL '24 hours')
+          OR (
+            ${bucket}::text = 'week'
+            AND COALESCE(i.published_at, i.stored_at) < NOW() - INTERVAL '24 hours'
+            AND COALESCE(i.published_at, i.stored_at) >= NOW() - INTERVAL '7 days'
+          )
+          OR (${bucket}::text = 'older' AND COALESCE(i.published_at, i.stored_at) < NOW() - INTERVAL '7 days')
+        )
         AND (
           ${source}::text = 'mixed'
           OR (${source}::text = 'user' AND EXISTS (
@@ -218,6 +433,8 @@ export async function listVideoFeed(query: VideoFeedQuery) {
     )
     SELECT
       ci.id,
+      ci.guid,
+      ci."videoKey",
       ci."videoUrl",
       ci."coverUrl",
       ci.title,
@@ -265,22 +482,84 @@ export async function listVideoFeed(query: VideoFeedQuery) {
       )
     )
     ORDER BY ci."sortTime" DESC, ci."storedAt" DESC, ci.id DESC
-    LIMIT ${limit + 1}
+    LIMIT ${candidateLimit}
   `);
 
-  const page = buildCursorPage({
-    rows,
-    limit,
-    getCursor: (item) => ({
-      sortTime: item.sortTime,
-      storedAt: item.storedAt,
-      id: item.id,
-    }),
-  });
+    return rows;
+  };
+
+  const selected: VideoFeedRow[] = [];
+  const bucketCandidates = new Map<VideoFeedTimeBucket, VideoFeedRow[]>();
+
+  const getBucketCandidates = async (bucket: VideoFeedTimeBucket) => {
+    const cached = bucketCandidates.get(bucket);
+    if (cached) {
+      return cached;
+    }
+
+    const candidates = await fetchCandidates(bucket);
+    bucketCandidates.set(bucket, candidates);
+    return candidates;
+  };
+
+  const appendFromBucket = async (bucket: VideoFeedTimeBucket, enforceLimits: boolean, enforceConsecutive: boolean) => {
+    if (selected.length >= limit) {
+      return;
+    }
+
+    const candidates = await getBucketCandidates(bucket);
+    const nextSelected = selectDiverseVideoItems({
+      selected,
+      candidates,
+      limit,
+      previousLastAuthor: cursor?.lastAuthor,
+      previousLastTarget: cursor?.lastTarget,
+      enforceLimits,
+      enforceConsecutive,
+    });
+
+    selected.splice(0, selected.length, ...nextSelected);
+  };
+
+  await appendFromBucket("recent", true, true);
+  await appendFromBucket("week", true, true);
+  await appendFromBucket("recent", false, true);
+  await appendFromBucket("week", false, true);
+  await appendFromBucket("recent", false, false);
+  await appendFromBucket("week", false, false);
+  await appendFromBucket("older", true, true);
+  await appendFromBucket("older", false, true);
+  await appendFromBucket("older", false, false);
+
+  const items = selected.slice(0, limit);
+  const cursorSeenIds = [...seenIds, ...items.map((item) => item.id)];
+  const cursorSeenGuids = [
+    ...seenGuids,
+    ...items.map((item) => item.guid).filter((guid): guid is string => typeof guid === "string" && guid.length > 0),
+  ];
+  const cursorSeenVideoKeys = [
+    ...seenVideoKeys,
+    ...items.map((item) => item.videoKey).filter((videoKey): videoKey is string => typeof videoKey === "string" && videoKey.length > 0),
+  ];
+  const lastItem = items[items.length - 1];
+  const nextCursor =
+    items.length > 0
+      ? encodeCursor({
+          seenIds: cursorSeenIds,
+          seenGuids: cursorSeenGuids,
+          seenVideoKeys: cursorSeenVideoKeys,
+          lastAuthor: lastItem ? (getAuthorKey(lastItem) ?? null) : null,
+          lastTarget: lastItem ? (normalizeDiversityKey(lastItem.target) ?? null) : null,
+        })
+      : null;
 
   return {
-    items: page.items.map(({ sortTime: _sortTime, ...item }) => item),
-    pagination: page.pagination,
+    items: items.map(({ guid: _guid, videoKey: _videoKey, sortTime: _sortTime, ...item }) => item),
+    pagination: {
+      limit,
+      nextCursor,
+      hasMore: items.length === limit,
+    },
   };
 }
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { decodeCursor, encodeCursor } from "@/lib/pagination";
+import { selectDiverseVideoItems } from "@/lib/video-feed-service";
 
 type FeedCursor = {
   sortTime: string;
@@ -97,4 +98,56 @@ test("video feed pagination remains stable when scores differ", () => {
     ["9"],
   );
   assert.equal(secondPage.some((item) => item.id === "b" || item.id === "a"), false);
+});
+
+test("selectDiverseVideoItems avoids consecutive authors and target flooding", () => {
+  const selected = selectDiverseVideoItems({
+    candidates: [
+      { id: "1", guid: "g1", author: "alice", target: "search:ai" },
+      { id: "2", guid: "g2", author: "alice", target: "search:ai" },
+      { id: "3", guid: "g3", author: "alice", target: "search:ai" },
+      { id: "4", guid: "g4", author: "bob", target: "search:design" },
+      { id: "5", guid: "g5", author: "carol", target: "search:code" },
+      { id: "6", guid: "g6", author: "dave", target: "search:ai" },
+    ],
+    limit: 5,
+  });
+
+  assert.deepEqual(
+    selected.map((item) => item.id),
+    ["1", "4", "5", "6"],
+  );
+});
+
+test("selectDiverseVideoItems can relax page limits without repeating ids or guids", () => {
+  const strictSelected = selectDiverseVideoItems({
+    candidates: [
+      { id: "1", guid: "same", author: "alice", target: "search:ai" },
+      { id: "2", guid: "g2", author: "alice", target: "search:ai" },
+      { id: "3", guid: "g3", author: "alice", target: "search:ai" },
+      { id: "4", guid: "same", author: "bob", target: "search:design" },
+    ],
+    limit: 3,
+  });
+  const relaxedSelected = selectDiverseVideoItems({
+    selected: strictSelected,
+    candidates: [
+      { id: "1", guid: "same", author: "alice", target: "search:ai" },
+      { id: "2", guid: "g2", author: "alice", target: "search:ai" },
+      { id: "3", guid: "g3", author: "alice", target: "search:ai" },
+      { id: "4", guid: "same", author: "bob", target: "search:design" },
+    ],
+    limit: 3,
+    enforceLimits: false,
+    enforceConsecutive: false,
+  });
+
+  assert.deepEqual(
+    strictSelected.map((item) => item.id),
+    ["1"],
+  );
+  assert.deepEqual(
+    relaxedSelected.map((item) => item.id),
+    ["1", "2", "3"],
+  );
 });

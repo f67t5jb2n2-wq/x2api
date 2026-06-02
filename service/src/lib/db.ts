@@ -26,6 +26,7 @@ function getPool() {
       connectionString: getRequiredEnv("DATABASE_URL"),
       ssl: { rejectUnauthorized: false },
       max: 10,
+      options: "-c work_mem=16MB",
     });
   }
 

@@ -14,6 +14,7 @@ const MAX_TARGET_TAGS = 12;
 const MAX_TARGET_TAG_LENGTH = 40;
 const MAX_TARGET_CATEGORY_LENGTH = 80;
 const YOUTUBE_CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{20,}$/;
+const YOUTUBE_FEED_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com"]);
 
 function normalizeYouTubeChannelID(raw: string) {
   const value = raw.trim();
@@ -48,6 +49,84 @@ function normalizeYouTubeChannelID(raw: string) {
   return channelID;
 }
 
+function normalizeYouTubeFeedURL(raw: string) {
+  const value = raw.trim();
+  if (!value) {
+    throw new Error("YouTube feed target cannot be empty.");
+  }
+
+  const url = new URL(value);
+  const host = url.host.toLowerCase();
+  if (!YOUTUBE_FEED_HOSTS.has(host) || url.pathname !== "/feeds/videos.xml") {
+    throw new Error("YouTube feed target must be a YouTube feed URL.");
+  }
+
+  const channelID = url.searchParams.get("channel_id")?.trim();
+  if (channelID && YOUTUBE_CHANNEL_ID_PATTERN.test(channelID)) {
+    return channelID;
+  }
+
+  const user = url.searchParams.get("user")?.trim();
+  if (user) {
+    const normalized = new URL("https://www.youtube.com/feeds/videos.xml");
+    normalized.searchParams.set("user", user);
+    return normalized.toString();
+  }
+
+  const playlistID = url.searchParams.get("playlist_id")?.trim();
+  if (playlistID) {
+    const normalized = new URL("https://www.youtube.com/feeds/videos.xml");
+    normalized.searchParams.set("playlist_id", playlistID);
+    return normalized.toString();
+  }
+
+  throw new Error("YouTube feed target must include channel_id, user, or playlist_id.");
+}
+
+function isYouTubeTargetURL(value: string) {
+  try {
+    const url = new URL(value.trim());
+    const host = url.host.toLowerCase();
+    return YOUTUBE_FEED_HOSTS.has(host) && (url.pathname === "/feeds/videos.xml" || url.pathname.startsWith("/channel/"));
+  } catch {
+    return value.trim().toLowerCase().startsWith("/channel/") || value.trim().toLowerCase().startsWith("/feeds/videos.xml");
+  }
+}
+
+function normalizeYouTubeTargetValue(raw: string) {
+  const value = raw.trim();
+  if (!value) {
+    throw new Error("YouTube target cannot be empty.");
+  }
+
+  if (value.toLowerCase().startsWith("/channel/")) {
+    const parts = value.split("/").filter(Boolean);
+    const channelID = parts[1];
+    if (!channelID) {
+      throw new Error("YouTube channel target cannot be empty.");
+    }
+    return normalizeYouTubeChannelID(channelID);
+  }
+
+  if (value.toLowerCase().startsWith("/feeds/videos.xml") || value.includes("youtube.com/feeds/videos.xml")) {
+    return normalizeYouTubeFeedURL(value);
+  }
+
+  if (value.includes("youtube.com")) {
+    const url = new URL(value);
+    const host = url.host.toLowerCase();
+    if (!YOUTUBE_FEED_HOSTS.has(host)) {
+      throw new Error("YouTube target must be a YouTube URL.");
+    }
+    if (url.pathname === "/feeds/videos.xml") {
+      return normalizeYouTubeFeedURL(value);
+    }
+    return normalizeYouTubeChannelID(value);
+  }
+
+  return normalizeYouTubeChannelID(value);
+}
+
 export function parseTarget(raw: string): ParsedTarget {
   const value = raw.trim();
   if (!value) {
@@ -55,12 +134,23 @@ export function parseTarget(raw: string): ParsedTarget {
   }
 
   if (value.toLowerCase().startsWith("youtube:")) {
-    const channelID = normalizeYouTubeChannelID(value.slice("youtube:".length));
+    const normalized = normalizeYouTubeTargetValue(value.slice("youtube:".length));
     return {
       source: "youtube",
       kind: "channel",
-      value: channelID,
-      normalizedValue: channelID.toLowerCase(),
+      value: normalized,
+      normalizedValue: normalized.toLowerCase(),
+      tags: [],
+    };
+  }
+
+  if (isYouTubeTargetURL(value)) {
+    const normalized = normalizeYouTubeTargetValue(value);
+    return {
+      source: "youtube",
+      kind: "channel",
+      value: normalized,
+      normalizedValue: normalized.toLowerCase(),
       tags: [],
     };
   }
@@ -203,12 +293,12 @@ function parseObjectTarget(candidate: { source?: unknown; kind?: unknown; target
   const explicitKind = normalizeTargetKind(candidate.kind, source);
   let parsed: ParsedTarget;
   if (source === "youtube") {
-    const channelID = normalizeYouTubeChannelID(candidate.target);
+    const normalized = normalizeYouTubeTargetValue(candidate.target);
     parsed = {
       source,
       kind: "channel",
-      value: channelID,
-      normalizedValue: channelID.toLowerCase(),
+      value: normalized,
+      normalizedValue: normalized.toLowerCase(),
       tags: [],
     };
   } else if (explicitKind === "keyword") {

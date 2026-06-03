@@ -12,6 +12,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlunparse
+from xml.etree import ElementTree as ET
 
 import requests
 from bs4 import BeautifulSoup
@@ -142,12 +143,21 @@ def parse_targets(raw: str | list[str] | None) -> list[str]:
 def parse_target_value(target: str) -> dict[str, str]:
     normalized = normalize_target(target)
     if normalized.lower().startswith("youtube:"):
-        channel_id = normalize_youtube_channel_id(normalized[8:].strip())
+        value = normalize_youtube_target_value(normalized[8:].strip())
         return {
             "source": "youtube",
             "kind": "channel",
-            "value": channel_id,
-            "normalized_value": channel_id.lower(),
+            "value": value,
+            "normalized_value": value.lower(),
+        }
+
+    if is_youtube_target_url(normalized):
+        value = normalize_youtube_target_value(normalized)
+        return {
+            "source": "youtube",
+            "kind": "channel",
+            "value": value,
+            "normalized_value": value.lower(),
         }
 
     if normalized.startswith("search:"):
@@ -204,6 +214,69 @@ def normalize_youtube_channel_id(raw: str) -> str:
     if not re.fullmatch(r"UC[A-Za-z0-9_-]{20,}", channel_id):
         raise ValueError("YouTube channel target must be a channel ID, /channel/UC... URL, or feeds/videos.xml?channel_id=UC... URL.")
     return channel_id
+
+
+def normalize_youtube_feed_url(raw: str) -> str:
+    value = raw.strip()
+    if not value:
+        raise ValueError("YouTube feed target cannot be empty.")
+
+    parsed = urlparse(value)
+    host = parsed.netloc.lower()
+    if host not in {"youtube.com", "www.youtube.com", "m.youtube.com"} or parsed.path != "/feeds/videos.xml":
+        raise ValueError("YouTube feed target must be a YouTube feed URL.")
+
+    query = parse_qs(parsed.query)
+    channel_id = (query.get("channel_id") or [""])[0].strip()
+    if channel_id and re.fullmatch(r"UC[A-Za-z0-9_-]{20,}", channel_id):
+        return channel_id
+
+    user = (query.get("user") or [""])[0].strip()
+    if user:
+        return urlunparse(("https", "www.youtube.com", "/feeds/videos.xml", "", urlencode({"user": user}), ""))
+
+    playlist_id = (query.get("playlist_id") or [""])[0].strip()
+    if playlist_id:
+        return urlunparse(("https", "www.youtube.com", "/feeds/videos.xml", "", urlencode({"playlist_id": playlist_id}), ""))
+
+    raise ValueError("YouTube feed target must include channel_id, user, or playlist_id.")
+
+
+def is_youtube_target_url(raw: str) -> bool:
+    value = raw.strip()
+    if not value:
+        return False
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return value.lower().startswith(("/channel/", "/feeds/videos.xml"))
+    host = parsed.netloc.lower()
+    if host in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+        return parsed.path == "/feeds/videos.xml" or parsed.path.startswith("/channel/")
+    return value.lower().startswith(("/channel/", "/feeds/videos.xml"))
+
+
+def normalize_youtube_target_value(raw: str) -> str:
+    value = raw.strip()
+    if not value:
+        raise ValueError("YouTube target cannot be empty.")
+
+    if value.lower().startswith("/channel/"):
+        parts = [part for part in value.split("/") if part]
+        if len(parts) >= 2:
+            return normalize_youtube_channel_id(parts[1])
+        raise ValueError("YouTube channel target cannot be empty.")
+
+    if value.lower().startswith("/feeds/videos.xml") or "youtube.com/feeds/videos.xml" in value.lower():
+        return normalize_youtube_feed_url(value)
+
+    if "youtube.com" in value.lower():
+        parsed = urlparse(value)
+        if parsed.path == "/feeds/videos.xml":
+            return normalize_youtube_feed_url(value)
+        return normalize_youtube_channel_id(value)
+
+    return normalize_youtube_channel_id(value)
 
 
 def create_opaque_token(prefix: str) -> str:
@@ -1032,7 +1105,7 @@ def extract_youtube_thumbnail(entry: dict, video_id: str) -> str:
     return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
 
-def make_youtube_queue_payload(target_row: dict, entry: dict, fetched_at: datetime) -> dict | None:
+def make_youtube_queue_payload(target_row: dict, entry: dict, fetched_at: datetime, channel_id: str | None) -> dict | None:
     video_id = extract_youtube_video_id(entry)
     if not video_id:
         return None
@@ -1046,10 +1119,11 @@ def make_youtube_queue_payload(target_row: dict, entry: dict, fetched_at: dateti
     author = youtube_entry_value(entry, "author", "name") or target_row["value"]
     thumbnail = extract_youtube_thumbnail(entry, video_id)
     expires_at = published_at + timedelta(hours=YOUTUBE_RETENTION_HOURS)
+    resolved_channel_id = channel_id or extract_youtube_channel_id(entry) or target_row["value"]
     return {
         "source": "youtube",
         "target_id": str(target_row["id"]),
-        "channel_id": target_row["value"],
+        "channel_id": resolved_channel_id,
         "guid": guid,
         "provider_video_id": video_id,
         "title": title,
@@ -1484,33 +1558,60 @@ def resolve_youtube_queue_row(conn, queue_row: dict) -> bool:
         return False
 
 
-def fetch_youtube_rss_entries(channel_id: str, fetched_at: datetime | None = None) -> list[dict]:
+def extract_youtube_channel_id(entry: dict) -> str | None:
+    return youtube_entry_value(entry, "yt_channelid", "yt:channelId", "channelId")
+
+
+def extract_youtube_channel_id_from_xml(xml: bytes) -> str | None:
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+    channel_id = root.findtext("yt:channelId", namespaces={"yt": "http://www.youtube.com/xml/schemas/2015"})
+    if channel_id and channel_id.strip():
+        return channel_id.strip()
+    return None
+
+
+def fetch_youtube_rss_entries(youtube_ref: str, fetched_at: datetime | None = None) -> tuple[list[dict], str | None]:
     import feedparser
 
     reference = fetched_at or now_utc()
-    url = "https://www.youtube.com/feeds/videos.xml?" + urlencode({"channel_id": channel_id})
+    channel_id = None
+    raw_target = youtube_ref.strip()
+    if raw_target.lower().startswith(("http://", "https://")):
+        url = raw_target
+    else:
+        channel_id = normalize_youtube_channel_id(raw_target)
+        url = "https://www.youtube.com/feeds/videos.xml?" + urlencode({"channel_id": channel_id})
+
     response = requests.get(
         url,
         headers={"User-Agent": "x2api-youtube-rss/1.0"},
         timeout=YOUTUBE_RSS_TIMEOUT_SECONDS,
     )
     if response.status_code == 404:
-        print(f"[YouTube] RSS 404 for {channel_id}; fallback to /videos page")
-        return fetch_youtube_videos_page_entries(channel_id, reference)
+        if channel_id:
+            print(f"[YouTube] RSS 404 for {channel_id}; fallback to /videos page")
+            return fetch_youtube_videos_page_entries(channel_id, reference), channel_id
+        raise RuntimeError(f"YouTube RSS 404 for {url}")
     response.raise_for_status()
     parsed = feedparser.parse(response.content)
     if parsed.bozo:
         raise RuntimeError(f"YouTube RSS parse failed: {parsed.bozo_exception}")
     entries = [dict(entry) for entry in parsed.entries]
+    resolved_channel_id = channel_id or extract_youtube_channel_id_from_xml(response.content) or next((extract_youtube_channel_id(entry) for entry in entries if extract_youtube_channel_id(entry)), None)
     if not entries:
-        print(f"[YouTube] RSS empty for {channel_id}; fallback to /videos page")
-        return fetch_youtube_videos_page_entries(channel_id, reference)
-    return entries
+        if resolved_channel_id:
+            print(f"[YouTube] RSS empty for {resolved_channel_id}; fallback to /videos page")
+            return fetch_youtube_videos_page_entries(resolved_channel_id, reference), resolved_channel_id
+        raise RuntimeError(f"YouTube RSS empty for {url}")
+    return entries, resolved_channel_id
 
 
 def monitor_youtube_target(conn, target_row: dict) -> int:
     fetched_at = now_utc()
-    entries = fetch_youtube_rss_entries(target_row["value"], fetched_at=fetched_at)
+    entries, channel_id = fetch_youtube_rss_entries(target_row["value"], fetched_at=fetched_at)
     if not entries:
         upsert_crawl_state(conn, target_row["id"], last_guid=target_row.get("last_guid"), last_error="No YouTube RSS entries returned.", success=False)
         return 0
@@ -1518,7 +1619,7 @@ def monitor_youtube_target(conn, target_row: dict) -> int:
     latest_published_at: datetime | None = None
     queued = 0
     for entry in entries:
-        payload = make_youtube_queue_payload(target_row, entry, fetched_at)
+        payload = make_youtube_queue_payload(target_row, entry, fetched_at, channel_id)
         if payload is None:
             continue
         payload_published_at = parse_datetime(payload.get("published_at"))

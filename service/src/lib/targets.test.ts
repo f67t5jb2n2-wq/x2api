@@ -43,6 +43,16 @@ test("parseTarget understands YouTube feed URLs", () => {
   });
 });
 
+test("parseTarget understands plain YouTube feed URLs", () => {
+  assert.deepEqual(parseTarget("https://www.youtube.com/feeds/videos.xml?user=CaspianReport"), {
+    source: "youtube",
+    kind: "channel",
+    value: "https://www.youtube.com/feeds/videos.xml?user=CaspianReport",
+    normalizedValue: "https://www.youtube.com/feeds/videos.xml?user=caspianreport",
+    tags: [],
+  });
+});
+
 test("parseTargets deduplicates normalized values", () => {
   const targets = parseTargets(["OpenAI", "openai", "search:AI", "search:ai", "youtube:UCE_M8A5yxnLfW0KghEeajjw"]);
   assert.equal(targets.length, 3);

@@ -6,8 +6,8 @@ import { listVideoCategories } from "@/lib/video-feed-service";
 type DbSubscriptionRow = {
   subscriptionId: string;
   targetId: string;
-  source: "twitter" | "youtube";
-  kind: "user" | "keyword" | "channel";
+  source: "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin";
+  kind: "user" | "keyword" | "channel" | "site";
   value: string;
   category: string | null;
   tags: string[] | null;
@@ -49,9 +49,9 @@ async function ensureTargets(targets: ParsedTarget[]) {
     `;
   }
 
-  const ensuredTargets: { id: string; source: "twitter" | "youtube"; kind: "user" | "keyword" | "channel"; value: string; normalizedValue: string }[] = [];
+  const ensuredTargets: { id: string; source: "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin"; kind: "user" | "keyword" | "channel" | "site"; value: string; normalizedValue: string }[] = [];
   for (const target of targets) {
-    const rows = asRows<{ id: string; source: "twitter" | "youtube"; kind: "user" | "keyword" | "channel"; value: string; normalizedValue: string }>(await sql`
+    const rows = asRows<{ id: string; source: "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin"; kind: "user" | "keyword" | "channel" | "site"; value: string; normalizedValue: string }>(await sql`
       SELECT
         id,
         source,

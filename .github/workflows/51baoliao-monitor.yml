@@ -1,0 +1,56 @@
+name: 51baoliao Video Monitor
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: x2ding-51baoliao-monitor
+  cancel-in-progress: false
+
+on:
+  schedule:
+    - cron: '30 * * * *'
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: '51爆料网站点入口'
+        required: false
+        default: 'https://www.51baoliao01.com'
+      max_pages:
+        description: '单次最多分页数'
+        required: false
+        default: '2'
+
+jobs:
+  monitor-51baoliao:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: collector/requirements.txt
+
+      - name: Install dependencies
+        working-directory: collector
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run 51baoliao monitor
+        working-directory: collector
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BASE_URL: ${{ inputs.base_url || vars.BAOLIAO51_BASE_URL || 'https://www.51baoliao01.com' }}
+          MAX_PAGES: ${{ inputs.max_pages || vars.BAOLIAO51_MONITOR_MAX_PAGES || '2' }}
+        run: |
+          python twitter_monitor.py monitor-51baoliao \
+            --base-url "${BASE_URL}" \
+            --max-pages "${MAX_PAGES}" \
+            --retention-hours 84

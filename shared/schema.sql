@@ -20,9 +20,13 @@ CREATE TABLE IF NOT EXISTS targets (
     normalized_value TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT targets_source_check CHECK (source IN ('twitter', 'youtube')),
-    CONSTRAINT targets_kind_check CHECK (kind IN ('user', 'keyword', 'channel')),
+    CONSTRAINT targets_source_check CHECK (source IN ('twitter', 'youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin')),
+    CONSTRAINT targets_kind_check CHECK (kind IN ('user', 'keyword', 'channel', 'site')),
     CONSTRAINT targets_youtube_kind_check CHECK (source <> 'youtube' OR kind = 'channel'),
+    CONSTRAINT targets_heiliao_kind_check CHECK (source <> 'heiliao' OR kind = 'site'),
+    CONSTRAINT targets_cg91_kind_check CHECK (source <> 'cg91' OR kind = 'site'),
+    CONSTRAINT targets_baoliao51_kind_check CHECK (source <> 'baoliao51' OR kind = 'site'),
+    CONSTRAINT targets_douyin_kind_check CHECK (source <> 'douyin' OR kind = 'site'),
     CONSTRAINT targets_unique_normalized UNIQUE (source, kind, normalized_value)
 );
 
@@ -31,9 +35,17 @@ ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_unique_normalized;
 ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_kind_check;
 ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_source_check;
 ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_youtube_kind_check;
-ALTER TABLE targets ADD CONSTRAINT targets_source_check CHECK (source IN ('twitter', 'youtube'));
-ALTER TABLE targets ADD CONSTRAINT targets_kind_check CHECK (kind IN ('user', 'keyword', 'channel'));
+ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_heiliao_kind_check;
+ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_cg91_kind_check;
+ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_baoliao51_kind_check;
+ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_douyin_kind_check;
+ALTER TABLE targets ADD CONSTRAINT targets_source_check CHECK (source IN ('twitter', 'youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin'));
+ALTER TABLE targets ADD CONSTRAINT targets_kind_check CHECK (kind IN ('user', 'keyword', 'channel', 'site'));
 ALTER TABLE targets ADD CONSTRAINT targets_youtube_kind_check CHECK (source <> 'youtube' OR kind = 'channel');
+ALTER TABLE targets ADD CONSTRAINT targets_heiliao_kind_check CHECK (source <> 'heiliao' OR kind = 'site');
+ALTER TABLE targets ADD CONSTRAINT targets_cg91_kind_check CHECK (source <> 'cg91' OR kind = 'site');
+ALTER TABLE targets ADD CONSTRAINT targets_baoliao51_kind_check CHECK (source <> 'baoliao51' OR kind = 'site');
+ALTER TABLE targets ADD CONSTRAINT targets_douyin_kind_check CHECK (source <> 'douyin' OR kind = 'site');
 ALTER TABLE targets ADD CONSTRAINT targets_unique_normalized UNIQUE (source, kind, normalized_value);
 
 CREATE TABLE IF NOT EXISTS subscriptions (

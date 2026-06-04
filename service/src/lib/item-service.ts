@@ -27,8 +27,8 @@ export type ListItemsResult = {
 export type ItemRecord = {
   id: string;
   target: string;
-  source: "twitter" | "youtube";
-  kind: "user" | "keyword" | "channel";
+  source: "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin";
+  kind: "user" | "keyword" | "channel" | "site";
   category: string | null;
   isSensitive: boolean;
   tags: string[];
@@ -120,7 +120,7 @@ export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
         i.expires_at > NOW()
       )
       AND (
-        t.source <> 'youtube'
+        t.source NOT IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin')
         OR i.video_url_expires_at > NOW() + INTERVAL '10 minutes'
       )
       AND (
@@ -135,6 +135,10 @@ export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
         OR LOWER(
           CASE
             WHEN t.source = 'youtube' THEN 'youtube:' || t.value
+            WHEN t.source = 'heiliao' THEN 'heiliao:' || t.value
+            WHEN t.source = 'cg91' THEN 'cg91:' || t.value
+            WHEN t.source = 'baoliao51' THEN 'baoliao51:' || t.value
+          WHEN t.source = 'douyin' THEN 'douyin:' || t.value
             WHEN t.kind = 'keyword' THEN 'search:' || t.value
             ELSE t.value
           END
@@ -222,6 +226,10 @@ export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
       i.id,
       CASE
         WHEN t.source = 'youtube' THEN 'youtube:' || t.value
+        WHEN t.source = 'heiliao' THEN 'heiliao:' || t.value
+        WHEN t.source = 'cg91' THEN 'cg91:' || t.value
+        WHEN t.source = 'baoliao51' THEN 'baoliao51:' || t.value
+          WHEN t.source = 'douyin' THEN 'douyin:' || t.value
         WHEN t.kind = 'keyword' THEN 'search:' || t.value
         ELSE t.value
       END AS target,
@@ -298,6 +306,10 @@ export async function listItemsByFeedToken(feedToken: string, limit = 50) {
         i.id,
         CASE
           WHEN t.source = 'youtube' THEN 'youtube:' || t.value
+          WHEN t.source = 'heiliao' THEN 'heiliao:' || t.value
+          WHEN t.source = 'cg91' THEN 'cg91:' || t.value
+          WHEN t.source = 'baoliao51' THEN 'baoliao51:' || t.value
+          WHEN t.source = 'douyin' THEN 'douyin:' || t.value
           WHEN t.kind = 'keyword' THEN 'search:' || t.value
           ELSE t.value
         END AS target,
@@ -350,7 +362,7 @@ export async function listItemsByFeedToken(feedToken: string, limit = 50) {
         AND c.status = 'active'
         AND i.expires_at > NOW()
         AND (
-          t.source <> 'youtube'
+          t.source NOT IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin')
           OR i.video_url_expires_at > NOW() + INTERVAL '10 minutes'
         )
     ),

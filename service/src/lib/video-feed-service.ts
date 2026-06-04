@@ -28,9 +28,9 @@ export type VideoFeedItem = {
   link: string | null;
   publishedAt: string | null;
   storedAt: string;
-  source: "twitter" | "youtube";
+  source: "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin";
   target: string;
-  kind: "user" | "keyword" | "channel";
+  kind: "user" | "keyword" | "channel" | "site";
   category: string | null;
   tags: string[];
   videoKey: string;
@@ -269,6 +269,14 @@ function videoKeyExpression(alias: "i" | "watched_item"): QueryChunk {
     text: `
     CASE
       WHEN ${alias}.metadata->>'youtube_video_id' IS NOT NULL THEN 'youtube:' || (${alias}.metadata->>'youtube_video_id')
+      WHEN ${alias}.metadata->>'heiliao_video_id' IS NOT NULL THEN 'heiliao:' || (${alias}.metadata->>'heiliao_video_id')
+      WHEN ${alias}.metadata->>'cg91_video_id' IS NOT NULL THEN 'cg91:' || (${alias}.metadata->>'cg91_video_id')
+      WHEN ${alias}.metadata->>'baoliao51_video_id' IS NOT NULL THEN 'baoliao51:' || (${alias}.metadata->>'baoliao51_video_id')
+      WHEN ${alias}.metadata->>'douyin_video_id' IS NOT NULL THEN 'douyin:' || (${alias}.metadata->>'douyin_video_id')
+      WHEN ${alias}.guid LIKE 'heiliao:%' THEN ${alias}.guid
+      WHEN ${alias}.guid LIKE 'cg91:%' THEN ${alias}.guid
+      WHEN ${alias}.guid LIKE 'baoliao51:%' THEN ${alias}.guid
+      WHEN ${alias}.guid LIKE 'douyin:%' THEN ${alias}.guid
       WHEN ${alias}.guid LIKE 'yt:video:%' THEN 'youtube:' || replace(${alias}.guid, 'yt:video:', '')
       WHEN ${alias}.video_url LIKE 'https://video.twimg.com/%' THEN split_part(${alias}.video_url, '?', 1)
       ELSE ${alias}.video_url
@@ -363,11 +371,16 @@ export async function listVideoFeed(query: VideoFeedQuery) {
         COALESCE(i.published_at, i.stored_at) AS "sortTime",
         CASE
           WHEN t.source = 'youtube' THEN 'youtube:' || t.value
+          WHEN t.source = 'heiliao' THEN 'heiliao:' || t.value
+          WHEN t.source = 'cg91' THEN 'cg91:' || t.value
+          WHEN t.source = 'baoliao51' THEN 'baoliao51:' || t.value
+          WHEN t.source = 'douyin' THEN 'douyin:' || t.value
           WHEN t.kind = 'keyword' THEN 'search:' || t.value
           ELSE t.value
         END AS target,
         t.kind,
         tp.category,
+        COALESCE(tp.weight, 0) AS "profileWeight",
         i.expires_at AS "expiresAt",
         i.video_url_expires_at AS "videoUrlExpiresAt",
         COALESCE(vs.impressions, 0) AS impressions,
@@ -390,7 +403,7 @@ export async function listVideoFeed(query: VideoFeedQuery) {
         AND i.video_url <> ''
         AND i.expires_at > NOW()
         AND (
-          t.source <> 'youtube'
+          t.source NOT IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin')
           OR i.video_url_expires_at > NOW() + INTERVAL '10 minutes'
         )
         AND NOT EXISTS (
@@ -549,7 +562,7 @@ export async function listVideoFeed(query: VideoFeedQuery) {
         ${cursor?.id ?? null}::uuid
       )
     )
-    ORDER BY ci."sortTime" DESC, ci."storedAt" DESC, ci.id DESC
+    ORDER BY (ci."sortTime" + (LEAST(GREATEST(COALESCE(ci."profileWeight", 0), 0), 120) * INTERVAL '1 minute')) DESC, ci."storedAt" DESC, ci.id DESC
     LIMIT ${candidateLimit}
   `);
 
@@ -651,7 +664,7 @@ export async function recordVideoEvent(input: {
       AND i.video_url <> ''
       AND i.expires_at > NOW()
       AND (
-        NOT EXISTS (SELECT 1 FROM targets t WHERE t.id = i.target_id AND t.source = 'youtube')
+        NOT EXISTS (SELECT 1 FROM targets t WHERE t.id = i.target_id AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin'))
         OR i.video_url_expires_at > NOW()
       )
   `;
@@ -694,7 +707,7 @@ export async function recordVideoEvent(input: {
       AND i.video_url <> ''
       AND i.expires_at > NOW()
       AND (
-        NOT EXISTS (SELECT 1 FROM targets t WHERE t.id = i.target_id AND t.source = 'youtube')
+        NOT EXISTS (SELECT 1 FROM targets t WHERE t.id = i.target_id AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin'))
         OR i.video_url_expires_at > NOW()
       )
     ON CONFLICT (item_id) DO UPDATE SET

@@ -1,5 +1,5 @@
-export type TargetSource = "twitter" | "youtube";
-export type TargetKind = "user" | "keyword" | "channel";
+export type TargetSource = "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin";
+export type TargetKind = "user" | "keyword" | "channel" | "site";
 
 export type ParsedTarget = {
   source: TargetSource;
@@ -15,6 +15,91 @@ const MAX_TARGET_TAG_LENGTH = 40;
 const MAX_TARGET_CATEGORY_LENGTH = 80;
 const YOUTUBE_CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{20,}$/;
 const YOUTUBE_FEED_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com"]);
+const HEILIAO_DEFAULT_URL = "https://among.uvsoskqus.cc";
+const CG91_DEFAULT_URL = "https://www.91cg1.com";
+const BAOLIAO51_DEFAULT_URL = "https://www.51baoliao01.com";
+const DOUYIN_DEFAULT_URL = "https://xygrfrfb3g.b2h7y8w.com";
+
+function normalizeHeiliaoTargetValue(raw: string) {
+  const value = (raw.trim() || HEILIAO_DEFAULT_URL).replace(/\/+$/, "");
+  const url = new URL(value.includes("://") ? value : `https://${value}`);
+  return `${url.protocol}//${url.host.toLowerCase()}`;
+}
+
+function normalizeHeiliaoTargetKey(value: string) {
+  return new URL(value).host.toLowerCase();
+}
+
+function isHeiliaoTargetURL(raw: string) {
+  try {
+    const value = raw.trim();
+    if (!value) {
+      return false;
+    }
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    const host = url.host.toLowerCase();
+    return host === "among.uvsoskqus.cc" || host.endsWith(".uvsoskqus.cc");
+  } catch {
+    return false;
+  }
+}
+
+function normalizeCg91TargetValue(raw: string) {
+  const value = (raw.trim() || CG91_DEFAULT_URL).replace(/\/+$/, "");
+  const url = new URL(value.includes("://") ? value : `https://${value}`);
+  return `${url.protocol}//${url.host.toLowerCase()}`;
+}
+
+function isCg91TargetURL(raw: string) {
+  try {
+    const value = raw.trim();
+    if (!value) {
+      return false;
+    }
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.host.toLowerCase() === "91cg1.com" || url.host.toLowerCase() === "www.91cg1.com";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeBaoliao51TargetValue(raw: string) {
+  const value = (raw.trim() || BAOLIAO51_DEFAULT_URL).replace(/\/+$/, "");
+  const url = new URL(value.includes("://") ? value : `https://${value}`);
+  return `${url.protocol}//${url.host.toLowerCase()}`;
+}
+
+function isBaoliao51TargetURL(raw: string) {
+  try {
+    const value = raw.trim();
+    if (!value) {
+      return false;
+    }
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.host.toLowerCase() === "51baoliao01.com" || url.host.toLowerCase() === "www.51baoliao01.com";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeDouyinTargetValue(raw: string) {
+  const value = (raw.trim() || DOUYIN_DEFAULT_URL).replace(/\/+$/, "");
+  const url = new URL(value.includes("://") ? value : `https://${value}`);
+  return `${url.protocol}//${url.host.toLowerCase()}`;
+}
+
+function isDouyinTargetURL(raw: string) {
+  try {
+    const value = raw.trim();
+    if (!value) {
+      return false;
+    }
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.host.toLowerCase() === new URL(DOUYIN_DEFAULT_URL).host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
 
 function normalizeYouTubeChannelID(raw: string) {
   const value = raw.trim();
@@ -133,6 +218,70 @@ export function parseTarget(raw: string): ParsedTarget {
     throw new Error("Target cannot be empty.");
   }
 
+  if (value.toLowerCase().startsWith("douyin:")) {
+    const normalized = normalizeDouyinTargetValue(value.slice("douyin:".length));
+    return { source: "douyin", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (isDouyinTargetURL(value)) {
+    const normalized = normalizeDouyinTargetValue(value);
+    return { source: "douyin", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("baoliao51:")) {
+    const normalized = normalizeBaoliao51TargetValue(value.slice("baoliao51:".length));
+    return { source: "baoliao51", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (isBaoliao51TargetURL(value)) {
+    const normalized = normalizeBaoliao51TargetValue(value);
+    return { source: "baoliao51", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("cg91:")) {
+    const normalized = normalizeCg91TargetValue(value.slice("cg91:".length));
+    return {
+      source: "cg91",
+      kind: "site",
+      value: normalized,
+      normalizedValue: normalizeHeiliaoTargetKey(normalized),
+      tags: [],
+    };
+  }
+
+  if (isCg91TargetURL(value)) {
+    const normalized = normalizeCg91TargetValue(value);
+    return {
+      source: "cg91",
+      kind: "site",
+      value: normalized,
+      normalizedValue: normalizeHeiliaoTargetKey(normalized),
+      tags: [],
+    };
+  }
+
+  if (value.toLowerCase().startsWith("heiliao:")) {
+    const normalized = normalizeHeiliaoTargetValue(value.slice("heiliao:".length));
+    return {
+      source: "heiliao",
+      kind: "site",
+      value: normalized,
+      normalizedValue: normalizeHeiliaoTargetKey(normalized),
+      tags: [],
+    };
+  }
+
+  if (isHeiliaoTargetURL(value)) {
+    const normalized = normalizeHeiliaoTargetValue(value);
+    return {
+      source: "heiliao",
+      kind: "site",
+      value: normalized,
+      normalizedValue: normalizeHeiliaoTargetKey(normalized),
+      tags: [],
+    };
+  }
+
   if (value.toLowerCase().startsWith("youtube:")) {
     const normalized = normalizeYouTubeTargetValue(value.slice("youtube:".length));
     return {
@@ -179,6 +328,18 @@ export function parseTarget(raw: string): ParsedTarget {
 }
 
 export function formatTarget(target: ParsedTarget | { source?: TargetSource; kind: TargetKind; value: string }): string {
+  if (target.source === "douyin") {
+    return `douyin:${target.value}`;
+  }
+  if (target.source === "heiliao") {
+    return `heiliao:${target.value}`;
+  }
+  if (target.source === "cg91") {
+    return `cg91:${target.value}`;
+  }
+  if (target.source === "baoliao51") {
+    return `baoliao51:${target.value}`;
+  }
   if (target.source === "youtube") {
     return `youtube:${target.value}`;
   }
@@ -255,7 +416,7 @@ function normalizeTargetSource(rawSource: unknown): TargetSource {
     throw new Error("Target source must be a string.");
   }
   const source = rawSource.trim().toLowerCase();
-  if (source === "twitter" || source === "youtube") {
+  if (source === "twitter" || source === "youtube" || source === "heiliao" || source === "cg91" || source === "baoliao51" || source === "douyin") {
     return source;
   }
   throw new Error("Unsupported target source.");
@@ -274,6 +435,30 @@ function normalizeTargetKind(rawKind: unknown, source: TargetSource): TargetKind
       return "channel";
     }
     throw new Error("YouTube targets must use channel kind.");
+  }
+  if (source === "heiliao") {
+    if (kind === "site") {
+      return "site";
+    }
+    throw new Error("Heiliao targets must use site kind.");
+  }
+  if (source === "cg91") {
+    if (kind === "site") {
+      return "site";
+    }
+    throw new Error("91cg targets must use site kind.");
+  }
+  if (source === "baoliao51") {
+    if (kind === "site") {
+      return "site";
+    }
+    throw new Error("51baoliao targets must use site kind.");
+  }
+  if (source === "douyin") {
+    if (kind === "site") {
+      return "site";
+    }
+    throw new Error("Douyin targets must use site kind.");
   }
   if (kind === "user" || kind === "keyword") {
     return kind;
@@ -301,6 +486,30 @@ function parseObjectTarget(candidate: { source?: unknown; kind?: unknown; target
       normalizedValue: normalized.toLowerCase(),
       tags: [],
     };
+  } else if (source === "heiliao") {
+    const normalized = normalizeHeiliaoTargetValue(candidate.target);
+    parsed = {
+      source,
+      kind: "site",
+      value: normalized,
+      normalizedValue: normalizeHeiliaoTargetKey(normalized),
+      tags: [],
+    };
+  } else if (source === "cg91") {
+    const normalized = normalizeCg91TargetValue(candidate.target);
+    parsed = {
+      source,
+      kind: "site",
+      value: normalized,
+      normalizedValue: normalizeHeiliaoTargetKey(normalized),
+      tags: [],
+    };
+  } else if (source === "baoliao51") {
+    const normalized = normalizeBaoliao51TargetValue(candidate.target);
+    parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  } else if (source === "douyin") {
+    const normalized = normalizeDouyinTargetValue(candidate.target);
+    parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   } else if (explicitKind === "keyword") {
     parsed = parseTarget(candidate.target.toLowerCase().startsWith("search:") ? candidate.target : `search:${candidate.target}`);
   } else if (explicitKind === "user") {

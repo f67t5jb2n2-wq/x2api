@@ -3560,6 +3560,10 @@ def douyin_video_url(base_url: str, raw_url: str) -> str:
     return urljoin(base_url + "/", raw_url.strip())
 
 
+def douyin_detail_url(base_url: str, video_id: str) -> str:
+    return urljoin(base_url + "/", f"recommend/?id={quote(video_id, safe='')}")
+
+
 def parse_douyin_recommend_page(base_url: str, page: int, page_size: int = 10) -> dict:
     payload = douyin_api_post(base_url, "/api/movie/recommend", {"page": str(page), "page_size": str(page_size)})
     items = payload.get("data") if isinstance(payload.get("data"), list) else []
@@ -3609,7 +3613,7 @@ def normalize_douyin_item(base_url: str, item: dict) -> dict | None:
         "nickname": user.get("nickname"),
         "tags": douyin_item_tags(item),
         "play_links": play_links,
-        "source_url": base_url + "/",
+        "source_url": douyin_detail_url(base_url, video_id),
         "raw_pay_type": item.get("pay_type"),
         "raw_layer_type": item.get("layer_type"),
     }

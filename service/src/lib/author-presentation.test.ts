@@ -26,7 +26,7 @@ test("buildAuthorPresentation uses item detail links for site sources", () => {
     ["heiliao", "黑料", "https://among.uvsoskqus.cc/archives/1"],
     ["cg91", "91吃瓜", "https://www.91cg1.com/post/1"],
     ["baoliao51", "51爆料", "https://www.51baoliao01.com/archives/1"],
-    ["douyin", "抖阴", "https://xygrfrfb3g.b2h7y8w.com/v/1"],
+    ["douyin", "抖阴", "https://xygrfrfb3g.b2h7y8w.com/recommend/?id=1"],
   ] as const;
 
   for (const [source, platform, link] of cases) {

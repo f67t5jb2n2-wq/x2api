@@ -7,6 +7,7 @@ from collector.twitter_monitor import (
     build_author_presentation,
     build_item_author_presentation,
     insert_items,
+    normalize_douyin_item,
     upsert_baoliao51_video_item,
     upsert_cg91_video_item,
     upsert_douyin_video_item,
@@ -92,7 +93,7 @@ class AuthorPresentationTest(unittest.TestCase):
             ("heiliao", "黑料", "https://among.uvsoskqus.cc/archives/1"),
             ("cg91", "91吃瓜", "https://www.91cg1.com/post/1"),
             ("baoliao51", "51爆料", "https://www.51baoliao01.com/archives/1"),
-            ("douyin", "抖阴", "https://xygrfrfb3g.b2h7y8w.com/v/1"),
+            ("douyin", "抖阴", "https://xygrfrfb3g.b2h7y8w.com/recommend/?id=1"),
         ]
 
         for source, platform, link in cases:
@@ -122,6 +123,26 @@ class AuthorPresentationTest(unittest.TestCase):
         self.assertIsNone(presentation["display_handle"])
         self.assertIsNone(presentation["author_profile_url"])
         self.assertIsNone(presentation["author_profile_platform"])
+
+    def test_douyin_normalized_item_uses_video_specific_source_url(self):
+        item = normalize_douyin_item(
+            "https://xygrfrfb3g.b2h7y8w.com",
+            {
+                "isAd": "n",
+                "id": "video-1",
+                "name": "Video",
+                "play_links": [
+                    {
+                        "code": "line1",
+                        "name": "线路1",
+                        "m3u8_url": "/api/m3u8/p/video.m3u8",
+                    }
+                ],
+            },
+        )
+
+        self.assertIsNotNone(item)
+        self.assertEqual(item["source_url"], "https://xygrfrfb3g.b2h7y8w.com/recommend/?id=video-1")
 
     def test_collector_insert_sql_params_stay_aligned(self):
         conn = FakeConnection()

@@ -194,6 +194,22 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
+CREATE OR REPLACE FUNCTION x2_douyin_detail_url(base_value TEXT, video_id_value TEXT)
+RETURNS TEXT AS $$
+DECLARE
+    base_url TEXT;
+    video_id TEXT;
+BEGIN
+    base_url := regexp_replace(BTRIM(COALESCE(base_value, '')), '/+$', '');
+    video_id := BTRIM(COALESCE(video_id_value, ''));
+    IF base_url = '' OR video_id !~ '^[A-Za-z0-9_-]+$' THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN base_url || '/recommend/?id=' || video_id;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
 CREATE OR REPLACE FUNCTION x2_normalized_source(source_value TEXT)
 RETURNS TEXT AS $$
 DECLARE
@@ -277,7 +293,17 @@ BEGIN
         NEW.display_handle := NULL;
         NEW.author_profile_url := profile_url;
         NEW.author_profile_platform := CASE WHEN profile_url IS NOT NULL THEN 'YouTube' ELSE NULL END;
-    ELSIF target_source IN ('heiliao', 'cg91', 'baoliao51', 'douyin') THEN
+    ELSIF target_source = 'douyin' THEN
+        profile_url := x2_douyin_detail_url(target_value, NEW.metadata->>'douyin_video_id');
+        IF profile_url IS NOT NULL THEN
+            NEW.link := profile_url;
+        ELSE
+            profile_url := x2_http_url(NEW.link);
+        END IF;
+        NEW.display_handle := NULL;
+        NEW.author_profile_url := profile_url;
+        NEW.author_profile_platform := CASE WHEN profile_url IS NOT NULL THEN x2_source_display_name(target_source) ELSE NULL END;
+    ELSIF target_source IN ('heiliao', 'cg91', 'baoliao51') THEN
         profile_url := x2_http_url(NEW.link);
         NEW.display_handle := NULL;
         NEW.author_profile_url := profile_url;

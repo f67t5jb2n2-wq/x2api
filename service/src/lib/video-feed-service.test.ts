@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { decodeCursor, encodeCursor } from "@/lib/pagination";
-import { selectDiverseVideoItems } from "@/lib/video-feed-service";
+import { mergeVideoFeedCandidatePools, selectDiverseVideoItems } from "@/lib/video-feed-service";
 
 type FeedCursor = {
   sortTime: string;
@@ -149,5 +149,74 @@ test("selectDiverseVideoItems can relax page limits without repeating ids or gui
   assert.deepEqual(
     relaxedSelected.map((item) => item.id),
     ["1", "2", "3"],
+  );
+});
+
+test("mergeVideoFeedCandidatePools keeps single non-empty pool when the other is empty", () => {
+  const merged = mergeVideoFeedCandidatePools([
+    [],
+    [
+      {
+        id: "public-1",
+        guid: "guid-public-1",
+        videoKey: "video-public-1",
+        sortTime: "2026-06-04T10:00:00.000Z",
+        storedAt: "2026-06-04T10:00:00.000Z",
+      },
+    ],
+  ]);
+
+  assert.deepEqual(
+    merged.map((item) => item.id),
+    ["public-1"],
+  );
+});
+
+test("mergeVideoFeedCandidatePools sorts candidates and removes duplicates", () => {
+  const merged = mergeVideoFeedCandidatePools([
+    [
+      {
+        id: "user-old",
+        guid: "guid-user-old",
+        videoKey: "video-user-old",
+        sortTime: "2026-06-04T09:00:00.000Z",
+        storedAt: "2026-06-04T09:00:00.000Z",
+      },
+      {
+        id: "same-id",
+        guid: "guid-user-same",
+        videoKey: "video-user-same",
+        sortTime: "2026-06-04T08:00:00.000Z",
+        storedAt: "2026-06-04T08:00:00.000Z",
+      },
+    ],
+    [
+      {
+        id: "public-new",
+        guid: "guid-public-new",
+        videoKey: "video-public-new",
+        sortTime: "2026-06-04T11:00:00.000Z",
+        storedAt: "2026-06-04T11:00:00.000Z",
+      },
+      {
+        id: "public-duplicate-video",
+        guid: "guid-public-duplicate-video",
+        videoKey: "video-user-old",
+        sortTime: "2026-06-04T10:00:00.000Z",
+        storedAt: "2026-06-04T10:00:00.000Z",
+      },
+      {
+        id: "same-id",
+        guid: "guid-public-same",
+        videoKey: "video-public-same",
+        sortTime: "2026-06-04T07:00:00.000Z",
+        storedAt: "2026-06-04T07:00:00.000Z",
+      },
+    ],
+  ]);
+
+  assert.deepEqual(
+    merged.map((item) => item.id),
+    ["public-new", "public-duplicate-video", "same-id"],
   );
 });

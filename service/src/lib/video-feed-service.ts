@@ -74,6 +74,7 @@ type VideoFeedRow = VideoFeedItem & {
 };
 
 type VideoFeedTimeBucket = "recent" | "week" | "older";
+type VideoFeedCandidatePool = "all" | "user" | "public";
 
 type VideoFeedDiversityItem = {
   id: string;
@@ -264,6 +265,54 @@ export function selectDiverseVideoItems<T extends VideoFeedDiversityItem>(input:
   return selected;
 }
 
+function compareVideoFeedRowsByTime(
+  left: { id: string; sortTime: string | Date; storedAt: string | Date },
+  right: { id: string; sortTime: string | Date; storedAt: string | Date },
+) {
+  const leftSortTime = left.sortTime instanceof Date ? left.sortTime.toISOString() : left.sortTime;
+  const rightSortTime = right.sortTime instanceof Date ? right.sortTime.toISOString() : right.sortTime;
+  if (leftSortTime !== rightSortTime) {
+    return rightSortTime.localeCompare(leftSortTime);
+  }
+
+  const leftStoredAt = left.storedAt instanceof Date ? left.storedAt.toISOString() : left.storedAt;
+  const rightStoredAt = right.storedAt instanceof Date ? right.storedAt.toISOString() : right.storedAt;
+  if (leftStoredAt !== rightStoredAt) {
+    return rightStoredAt.localeCompare(leftStoredAt);
+  }
+
+  return right.id.localeCompare(left.id);
+}
+
+export function mergeVideoFeedCandidatePools<
+  T extends { id: string; guid?: string | null; videoKey?: string | null; sortTime: string | Date; storedAt: string | Date },
+>(pools: T[][]) {
+  const merged: T[] = [];
+  const seenIds = new Set<string>();
+  const seenGuids = new Set<string>();
+  const seenVideoKeys = new Set<string>();
+
+  for (const item of pools.flat().sort(compareVideoFeedRowsByTime)) {
+    const guidKey = normalizeDiversityKey(item.guid);
+    const videoKey = normalizeDiversityKey(item.videoKey);
+
+    if (seenIds.has(item.id) || (guidKey && seenGuids.has(guidKey)) || (videoKey && seenVideoKeys.has(videoKey))) {
+      continue;
+    }
+
+    merged.push(item);
+    seenIds.add(item.id);
+    if (guidKey) {
+      seenGuids.add(guidKey);
+    }
+    if (videoKey) {
+      seenVideoKeys.add(videoKey);
+    }
+  }
+
+  return merged;
+}
+
 function videoKeyExpression(alias: "i" | "watched_item"): QueryChunk {
   return {
     text: `
@@ -348,8 +397,10 @@ export async function listVideoFeed(query: VideoFeedQuery) {
   const seenGuids = [...new Set(cursor?.seenGuids ?? [])];
   const seenVideoKeys = [...new Set(cursor?.seenVideoKeys ?? [])];
   const candidateLimit = Math.max(limit * 3, 30);
+  const publicCandidateLimit = Math.max(limit * 2, 20);
 
-  const fetchCandidates = async (bucket: VideoFeedTimeBucket) => {
+  const fetchCandidates = async (bucket: VideoFeedTimeBucket, pool: VideoFeedCandidatePool) => {
+    const poolCandidateLimit = pool === "public" ? publicCandidateLimit : candidateLimit;
     const rows = asRows<VideoFeedRow>(await sql`
     WITH candidate_items AS (
       SELECT
@@ -430,24 +481,14 @@ export async function listVideoFeed(query: VideoFeedQuery) {
           OR (${bucket}::text = 'older' AND COALESCE(i.published_at, i.stored_at) < NOW() - INTERVAL '7 days')
         )
         AND (
-          ${source}::text = 'mixed'
-          OR (${source}::text = 'user' AND EXISTS (
+          ${pool}::text = 'all'
+          OR (${pool}::text = 'user' AND EXISTS (
             SELECT 1
             FROM subscriptions s
             WHERE s.target_id = i.target_id
               AND s.client_id = ${query.clientId}
           ))
-          OR (${source}::text = 'public' AND COALESCE(tp.is_public_pool, FALSE) = TRUE)
-        )
-        AND (
-          ${source}::text <> 'mixed'
-          OR EXISTS (
-            SELECT 1
-            FROM subscriptions s
-            WHERE s.target_id = i.target_id
-              AND s.client_id = ${query.clientId}
-          )
-          OR COALESCE(tp.is_public_pool, FALSE) = TRUE
+          OR (${pool}::text = 'public' AND COALESCE(tp.is_public_pool, FALSE) = TRUE)
         )
         AND NOT EXISTS (
           SELECT 1
@@ -562,7 +603,7 @@ export async function listVideoFeed(query: VideoFeedQuery) {
       )
     )
     ORDER BY ci."sortTime" DESC, ci."storedAt" DESC, ci.id DESC
-    LIMIT ${candidateLimit}
+    LIMIT ${poolCandidateLimit}
   `);
 
     return rows;
@@ -577,7 +618,10 @@ export async function listVideoFeed(query: VideoFeedQuery) {
       return cached;
     }
 
-    const candidates = await fetchCandidates(bucket);
+    const candidates =
+      source === "mixed"
+        ? mergeVideoFeedCandidatePools(await Promise.all([fetchCandidates(bucket, "user"), fetchCandidates(bucket, "public")]))
+        : await fetchCandidates(bucket, source === "public" ? "public" : source === "user" ? "user" : "all");
     bucketCandidates.set(bucket, candidates);
     return candidates;
   };

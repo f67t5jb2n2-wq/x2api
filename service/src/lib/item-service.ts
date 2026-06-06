@@ -28,6 +28,7 @@ export type ListItemsResult = {
 type ItemRecordBase = {
   id: string;
   target: string;
+  targetLink: string | null;
   source: "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin";
   kind: "user" | "keyword" | "channel" | "site";
   category: string | null;
@@ -143,11 +144,12 @@ export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
             WHEN t.source = 'heiliao' THEN 'heiliao:' || t.value
             WHEN t.source = 'cg91' THEN 'cg91:' || t.value
             WHEN t.source = 'baoliao51' THEN 'baoliao51:' || t.value
-          WHEN t.source = 'douyin' THEN 'douyin:' || t.value
+            WHEN t.source = 'douyin' THEN 'douyin:' || t.value
             WHEN t.kind = 'keyword' THEN 'search:' || t.value
             ELSE t.value
           END
         ) = ${targetFilter}
+        OR (t.source IN ('heiliao', 'cg91', 'baoliao51', 'douyin') AND LOWER(t.source) = ${targetFilter})
       )
       AND (
         ${sinceFilter}::timestamptz IS NULL
@@ -231,13 +233,16 @@ export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
       i.id,
       CASE
         WHEN t.source = 'youtube' THEN 'youtube:' || t.value
-        WHEN t.source = 'heiliao' THEN 'heiliao:' || t.value
-        WHEN t.source = 'cg91' THEN 'cg91:' || t.value
-        WHEN t.source = 'baoliao51' THEN 'baoliao51:' || t.value
-          WHEN t.source = 'douyin' THEN 'douyin:' || t.value
+        WHEN t.source IN ('heiliao', 'cg91', 'baoliao51', 'douyin') THEN t.source
         WHEN t.kind = 'keyword' THEN 'search:' || t.value
         ELSE t.value
       END AS target,
+      CASE
+        WHEN t.source IN ('heiliao', 'cg91', 'baoliao51', 'douyin') THEN t.value
+        WHEN t.source = 'youtube' THEN 'https://www.youtube.com/channel/' || t.value
+        WHEN t.source = 'twitter' AND t.kind = 'user' THEN 'https://x.com/' || t.value
+        ELSE NULL
+      END AS "targetLink",
       t.kind,
       t.source,
       tp.category,
@@ -318,13 +323,16 @@ export async function listItemsByFeedToken(feedToken: string, limit = 50) {
         i.id,
         CASE
           WHEN t.source = 'youtube' THEN 'youtube:' || t.value
-          WHEN t.source = 'heiliao' THEN 'heiliao:' || t.value
-          WHEN t.source = 'cg91' THEN 'cg91:' || t.value
-          WHEN t.source = 'baoliao51' THEN 'baoliao51:' || t.value
-          WHEN t.source = 'douyin' THEN 'douyin:' || t.value
+          WHEN t.source IN ('heiliao', 'cg91', 'baoliao51', 'douyin') THEN t.source
           WHEN t.kind = 'keyword' THEN 'search:' || t.value
           ELSE t.value
         END AS target,
+        CASE
+          WHEN t.source IN ('heiliao', 'cg91', 'baoliao51', 'douyin') THEN t.value
+          WHEN t.source = 'youtube' THEN 'https://www.youtube.com/channel/' || t.value
+          WHEN t.source = 'twitter' AND t.kind = 'user' THEN 'https://x.com/' || t.value
+          ELSE NULL
+        END AS "targetLink",
         t.source,
         t.kind,
         tp.category,

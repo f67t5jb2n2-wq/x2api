@@ -31,6 +31,7 @@ type VideoFeedItemBase = {
   storedAt: string;
   source: "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin";
   target: string;
+  targetLink: string | null;
   kind: "user" | "keyword" | "channel" | "site";
   category: string | null;
   tags: string[];
@@ -486,13 +487,16 @@ export async function listVideoFeed(query: VideoFeedQuery) {
         COALESCE(i.published_at, i.stored_at) AS "sortTime",
         CASE
           WHEN t.source = 'youtube' THEN 'youtube:' || t.value
-          WHEN t.source = 'heiliao' THEN 'heiliao:' || t.value
-          WHEN t.source = 'cg91' THEN 'cg91:' || t.value
-          WHEN t.source = 'baoliao51' THEN 'baoliao51:' || t.value
-          WHEN t.source = 'douyin' THEN 'douyin:' || t.value
+          WHEN t.source IN ('heiliao', 'cg91', 'baoliao51', 'douyin') THEN t.source
           WHEN t.kind = 'keyword' THEN 'search:' || t.value
           ELSE t.value
         END AS target,
+        CASE
+          WHEN t.source IN ('heiliao', 'cg91', 'baoliao51', 'douyin') THEN t.value
+          WHEN t.source = 'youtube' THEN 'https://www.youtube.com/channel/' || t.value
+          WHEN t.source = 'twitter' AND t.kind = 'user' THEN 'https://x.com/' || t.value
+          ELSE NULL
+        END AS "targetLink",
         t.kind,
         tp.category,
         i.expires_at AS "expiresAt",
@@ -633,6 +637,7 @@ export async function listVideoFeed(query: VideoFeedQuery) {
       ci.source,
       ci."sortTime",
       ci.target,
+      ci."targetLink",
       ci.kind,
       ci.category,
       ci."expiresAt",

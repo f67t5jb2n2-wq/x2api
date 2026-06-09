@@ -163,6 +163,16 @@ test("parseTarget understands 91porn site targets", () => {
   });
 });
 
+test("parseTarget understands Bad.news site targets", () => {
+  assert.deepEqual(parseTarget("https://bad.news/sort-new/page-1"), {
+    source: "badnews",
+    kind: "site",
+    value: "https://bad.news",
+    normalizedValue: "bad.news",
+    tags: [],
+  });
+});
+
 test("parseTargets deduplicates normalized values", () => {
   const targets = parseTargets(["OpenAI", "openai", "search:AI", "search:ai", "youtube:UCE_M8A5yxnLfW0KghEeajjw"]);
   assert.equal(targets.length, 3);
@@ -332,6 +342,17 @@ test("parseTargets normalizes explicit source aliases", () => {
       kind: "site",
       value: "https://91porn.com",
       normalizedValue: "91porn.com",
+      category: "adult",
+      tags: [],
+    },
+  ]);
+
+  assert.deepEqual(parseTargets([{ source: "bad.news", kind: "site", target: "bad.news/sort-new/page-1", category: "adult" }]), [
+    {
+      source: "badnews",
+      kind: "site",
+      value: "https://bad.news",
+      normalizedValue: "bad.news",
       category: "adult",
       tags: [],
     },

@@ -1,4 +1,4 @@
-export type TargetSource = "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin" | "18mh" | "rou" | "dadaafa" | "18j" | "tikporn" | "91porna" | "91porn";
+export type TargetSource = "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin" | "18mh" | "rou" | "dadaafa" | "18j" | "tikporn" | "91porna" | "91porn" | "badnews";
 export type TargetKind = "user" | "keyword" | "channel" | "site";
 
 export type ParsedTarget = {
@@ -26,6 +26,7 @@ const J18_DEFAULT_URL = "https://18j.tv";
 const TIKPORN_DEFAULT_URL = "https://tik.porn";
 const PORNA91_DEFAULT_URL = "https://91porna.com";
 const PORN91_DEFAULT_URL = "https://91porn.com";
+const BADNEWS_DEFAULT_URL = "https://bad.news";
 
 function normalizeHeiliaoTargetValue(raw: string) {
   const value = (raw.trim() || HEILIAO_DEFAULT_URL).replace(/\/+$/, "");
@@ -241,6 +242,25 @@ function isPorn91TargetURL(raw: string) {
   }
 }
 
+function normalizeBadNewsTargetValue(raw: string) {
+  const value = (raw.trim() || BADNEWS_DEFAULT_URL).replace(/\/+$/, "");
+  const url = new URL(value.includes("://") ? value : `https://${value}`);
+  return `${url.protocol}//${url.host.toLowerCase()}`;
+}
+
+function isBadNewsTargetURL(raw: string) {
+  try {
+    const value = raw.trim();
+    if (!value) {
+      return false;
+    }
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.host.toLowerCase() === "bad.news" || url.host.toLowerCase() === "www.bad.news";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeYouTubeChannelID(raw: string) {
   const value = raw.trim();
   if (!value) {
@@ -356,6 +376,21 @@ export function parseTarget(raw: string): ParsedTarget {
   const value = raw.trim();
   if (!value) {
     throw new Error("Target cannot be empty.");
+  }
+
+  if (value.toLowerCase().startsWith("badnews:")) {
+    const normalized = normalizeBadNewsTargetValue(value.slice("badnews:".length));
+    return { source: "badnews", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("bad.news:")) {
+    const normalized = normalizeBadNewsTargetValue(value.slice("bad.news:".length));
+    return { source: "badnews", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (isBadNewsTargetURL(value)) {
+    const normalized = normalizeBadNewsTargetValue(value);
+    return { source: "badnews", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   }
 
   if (value.toLowerCase().startsWith("91porn:")) {
@@ -548,6 +583,9 @@ export function parseTarget(raw: string): ParsedTarget {
 }
 
 export function formatTarget(target: ParsedTarget | { source?: TargetSource; kind: TargetKind; value: string }): string {
+  if (target.source === "badnews") {
+    return `badnews:${target.value}`;
+  }
   if (target.source === "91porn") {
     return `91porn:${target.value}`;
   }
@@ -685,6 +723,9 @@ function normalizeTargetSource(rawSource: unknown): TargetSource {
     case "tikporn":
     case "tik.porn":
       return "tikporn";
+    case "badnews":
+    case "bad.news":
+      return "badnews";
     case "91porn":
     case "91porn.com":
       return "91porn";
@@ -782,6 +823,12 @@ function normalizeTargetKind(rawKind: unknown, source: TargetSource): TargetKind
     }
     throw new Error("91porn targets must use site kind.");
   }
+  if (source === "badnews") {
+    if (kind === "site") {
+      return "site";
+    }
+    throw new Error("Bad.news targets must use site kind.");
+  }
   if (kind === "user" || kind === "keyword") {
     return kind;
   }
@@ -852,6 +899,9 @@ function parseObjectTarget(candidate: { source?: unknown; kind?: unknown; target
     parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   } else if (source === "91porn") {
     const normalized = normalizePorn91TargetValue(candidate.target);
+    parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  } else if (source === "badnews") {
+    const normalized = normalizeBadNewsTargetValue(candidate.target);
     parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   } else if (explicitKind === "keyword") {
     parsed = parseTarget(candidate.target.toLowerCase().startsWith("search:") ? candidate.target : `search:${candidate.target}`);

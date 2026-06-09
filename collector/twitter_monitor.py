@@ -26,6 +26,20 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 try:
+    from collector.badnews_source import (
+        BADNEWS_CRITICAL_WINDOW_MINUTES,
+        BADNEWS_DEFAULT_BASE_URL,
+        BADNEWS_KIND,
+        BADNEWS_REFRESH_WINDOW_MINUTES,
+        BADNEWS_RETENTION_HOURS,
+        BADNEWS_SITE_NAME,
+        BADNEWS_SOURCE,
+        is_badnews_target_url,
+        monitor_site as monitor_badnews_site,
+        normalize_badnews_target_value,
+        refresh_playback_urls as refresh_badnews_playback_urls,
+        upsert_video_item as upsert_badnews_video_item,
+    )
     from collector.dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
         DADAAFA_DEFAULT_BASE_URL,
@@ -122,6 +136,20 @@ try:
         normalize_tikporn_target_value,
     )
 except ModuleNotFoundError:
+    from badnews_source import (
+        BADNEWS_CRITICAL_WINDOW_MINUTES,
+        BADNEWS_DEFAULT_BASE_URL,
+        BADNEWS_KIND,
+        BADNEWS_REFRESH_WINDOW_MINUTES,
+        BADNEWS_RETENTION_HOURS,
+        BADNEWS_SITE_NAME,
+        BADNEWS_SOURCE,
+        is_badnews_target_url,
+        monitor_site as monitor_badnews_site,
+        normalize_badnews_target_value,
+        refresh_playback_urls as refresh_badnews_playback_urls,
+        upsert_video_item as upsert_badnews_video_item,
+    )
     from dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
         DADAAFA_DEFAULT_BASE_URL,
@@ -268,6 +296,7 @@ DETAIL_LINK_PROFILE_SOURCES = {
     MH18_SOURCE,
     ROU_SOURCE,
     DADAAFA_SOURCE,
+    BADNEWS_SOURCE,
     TIKPORN_SOURCE,
     PORNA91_SOURCE,
     PORN91_SOURCE,
@@ -380,6 +409,18 @@ def parse_targets(raw: str | list[str] | None) -> list[str]:
 
 def parse_target_value(target: str) -> dict[str, str]:
     normalized = normalize_target(target)
+    if normalized.lower().startswith("badnews:"):
+        value = normalize_badnews_target_value(normalized[len("badnews:") :].strip())
+        return {"source": BADNEWS_SOURCE, "kind": BADNEWS_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("bad.news:"):
+        value = normalize_badnews_target_value(normalized[len("bad.news:") :].strip())
+        return {"source": BADNEWS_SOURCE, "kind": BADNEWS_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if is_badnews_target_url(normalized):
+        value = normalize_badnews_target_value(normalized)
+        return {"source": BADNEWS_SOURCE, "kind": BADNEWS_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
     if normalized.lower().startswith("91porn:"):
         value = normalize_91porn_target_value(normalized[len("91porn:") :].strip())
         return {"source": PORN91_SOURCE, "kind": PORN91_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
@@ -541,6 +582,8 @@ def format_target(kind: str, value: str) -> str:
 
 
 def format_target_row(target_row: dict) -> str:
+    if target_row.get("source") == BADNEWS_SOURCE:
+        return f"badnews:{target_row['value']}"
     if target_row.get("source") == PORN91_SOURCE:
         return f"91porn:{target_row['value']}"
     if target_row.get("source") == PORNA91_SOURCE:
@@ -593,6 +636,8 @@ def normalized_presentation_source(source: str | None) -> str:
         return J18_SOURCE
     if source_key in {"tikporn", "tik", "tik.porn"}:
         return TIKPORN_SOURCE
+    if source_key in {"badnews", "bad.news"}:
+        return BADNEWS_SOURCE
     if source_key in {"91porn", "91porn.com"}:
         return PORN91_SOURCE
     if source_key in {"91porna", "porna91", "91porna.com"}:
@@ -614,6 +659,7 @@ def source_display_name(source: str | None) -> str:
         DADAAFA_SOURCE: DADAAFA_SITE_NAME,
         J18_SOURCE: J18_SITE_NAME,
         TIKPORN_SOURCE: TIKPORN_SITE_NAME,
+        BADNEWS_SOURCE: BADNEWS_SITE_NAME,
         PORN91_SOURCE: PORN91_SITE_NAME,
         PORNA91_SOURCE: PORNA91_SITE_NAME,
     }.get(source_key, source_key or "X")
@@ -3594,7 +3640,7 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
             DELETE FROM items i
             USING targets t
             WHERE t.id = i.target_id
-              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', '91porna', '91porn', '18j')
+              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '18j')
               AND i.expires_at <= NOW()
             """
         )
@@ -4788,6 +4834,38 @@ def command_refresh_91porn_playback_urls(args) -> int:
     return 0
 
 
+def command_monitor_badnews(args) -> int:
+    base_url = args.base_url or BADNEWS_DEFAULT_BASE_URL
+    retention_hours = args.retention_hours if args.retention_hours is not None else BADNEWS_RETENTION_HOURS
+    if args.retention_days is not None:
+        retention_hours = args.retention_days * 24
+    max_records = args.max_records if args.max_records is not None else DEFAULT_MAX_RECORDS
+    if args.dry_run and not DATABASE_URL:
+        stats = monitor_badnews_site(None, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=True)
+        print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+        return 0
+    with get_db_connection() as conn:
+        stats = monitor_badnews_site(conn, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=args.dry_run)
+        if args.dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        if not args.skip_cleanup and not args.dry_run:
+            cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
+            conn.commit()
+            stats = {**stats, "cleanup": cleanup_stats}
+    print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+def command_refresh_badnews_playback_urls(args) -> int:
+    with get_db_connection() as conn:
+        stats = refresh_badnews_playback_urls(conn, limit=max(1, args.limit), refresh_window_minutes=max(1, args.refresh_window_minutes), critical_window_minutes=max(1, args.critical_window_minutes))
+        conn.commit()
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_monitor_tikporn(args) -> int:
     base_url = args.base_url or TIKPORN_DEFAULT_BASE_URL
     retention_hours = args.retention_hours if args.retention_hours is not None else TIKPORN_RETENTION_HOURS
@@ -4967,6 +5045,17 @@ def build_parser() -> argparse.ArgumentParser:
     porn91_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
     porn91_monitor_parser.set_defaults(func=command_monitor_91porn)
 
+    badnews_monitor_parser = subparsers.add_parser("monitor-badnews", help="单独抓取 Bad.news 视频并入库")
+    badnews_monitor_parser.add_argument("--base-url", default=BADNEWS_DEFAULT_BASE_URL, help="Bad.news 站点入口；也可传 https://bad.news/sort-new/page-1")
+    badnews_monitor_parser.add_argument("--max-pages", type=int, default=2, help="单次最多分页数")
+    badnews_monitor_parser.add_argument("--retention-hours", type=int, default=None, help="视频业务保留小时数，默认 84")
+    badnews_monitor_parser.add_argument("--retention-days", type=int, default=None, help="兼容旧参数：视频业务保留天数")
+    badnews_monitor_parser.add_argument("--max-records", type=int, default=None, help="最大保留记录数")
+    badnews_monitor_parser.add_argument("--skip-cleanup", action="store_true", help="本轮监控后不执行清理")
+    badnews_monitor_parser.add_argument("--private-pool", action="store_true", help="不加入公共视频池")
+    badnews_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
+    badnews_monitor_parser.set_defaults(func=command_monitor_badnews)
+
     tikporn_monitor_parser = subparsers.add_parser("monitor-tikporn", help="单独抓取 Tik.Porn 视频并入库")
     tikporn_monitor_parser.add_argument("--base-url", default=TIKPORN_DEFAULT_BASE_URL, help="Tik.Porn 站点入口")
     tikporn_monitor_parser.add_argument("--max-pages", type=int, default=1, help="兼容参数；Tik.Porn 最新接口当前固定返回最新一页")
@@ -5064,6 +5153,12 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_porn91_parser.add_argument("--refresh-window-minutes", type=int, default=PORN91_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
     refresh_porn91_parser.add_argument("--critical-window-minutes", type=int, default=PORN91_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
     refresh_porn91_parser.set_defaults(func=command_refresh_91porn_playback_urls)
+
+    refresh_badnews_parser = subparsers.add_parser("refresh-badnews-playback-urls", help="刷新 Bad.news 播放 URL（仅处理带过期时间的历史记录）")
+    refresh_badnews_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")
+    refresh_badnews_parser.add_argument("--refresh-window-minutes", type=int, default=BADNEWS_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
+    refresh_badnews_parser.add_argument("--critical-window-minutes", type=int, default=BADNEWS_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
+    refresh_badnews_parser.set_defaults(func=command_refresh_badnews_playback_urls)
 
     refresh_tikporn_parser = subparsers.add_parser("refresh-tikporn-playback-urls", help="刷新 Tik.Porn 播放 URL（仅处理带过期时间的历史记录）")
     refresh_tikporn_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")

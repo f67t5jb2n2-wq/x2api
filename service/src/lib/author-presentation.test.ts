@@ -34,6 +34,7 @@ test("buildAuthorPresentation uses item detail links for site sources", () => {
     ["tikporn", "Tik.Porn", "https://tik.porn/video/1529368"],
     ["91porna", "91porna", "https://91porna.com/comic/index/detail?video_key=346951"],
     ["91porn", "91porn", "https://91porn.com/view_video.php?viewkey=abc123"],
+    ["badnews", "Bad.news", "https://bad.news/t/6227046"],
   ] as const;
 
   for (const [source, platform, link] of cases) {

@@ -9,8 +9,8 @@ concurrency:
 
 on:
   schedule:
-    - cron: '5,45 0-23/2 * * *'
-    - cron: '25 1-23/2 * * *'
+    - cron: '11,51 0-23/2 * * *'
+    - cron: '31 1-23/2 * * *'
   workflow_dispatch:
     inputs:
       base_url:

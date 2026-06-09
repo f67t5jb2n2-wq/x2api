@@ -26,6 +26,20 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 try:
+    from collector.avgood_source import (
+        AVGOOD_CRITICAL_WINDOW_MINUTES,
+        AVGOOD_DEFAULT_BASE_URL,
+        AVGOOD_KIND,
+        AVGOOD_REFRESH_WINDOW_MINUTES,
+        AVGOOD_RETENTION_HOURS,
+        AVGOOD_SITE_NAME,
+        AVGOOD_SOURCE,
+        is_avgood_target_url,
+        monitor_site as monitor_avgood_site,
+        normalize_avgood_target_value,
+        refresh_playback_urls as refresh_avgood_playback_urls,
+        upsert_video_item as upsert_avgood_video_item,
+    )
     from collector.badnews_source import (
         BADNEWS_CRITICAL_WINDOW_MINUTES,
         BADNEWS_DEFAULT_BASE_URL,
@@ -164,6 +178,20 @@ try:
         normalize_tikporn_target_value,
     )
 except ModuleNotFoundError:
+    from avgood_source import (
+        AVGOOD_CRITICAL_WINDOW_MINUTES,
+        AVGOOD_DEFAULT_BASE_URL,
+        AVGOOD_KIND,
+        AVGOOD_REFRESH_WINDOW_MINUTES,
+        AVGOOD_RETENTION_HOURS,
+        AVGOOD_SITE_NAME,
+        AVGOOD_SOURCE,
+        is_avgood_target_url,
+        monitor_site as monitor_avgood_site,
+        normalize_avgood_target_value,
+        refresh_playback_urls as refresh_avgood_playback_urls,
+        upsert_video_item as upsert_avgood_video_item,
+    )
     from badnews_source import (
         BADNEWS_CRITICAL_WINDOW_MINUTES,
         BADNEWS_DEFAULT_BASE_URL,
@@ -359,6 +387,7 @@ DETAIL_LINK_PROFILE_SOURCES = {
     PORN91_SOURCE,
     J18_SOURCE,
     BDRQ_SOURCE,
+    AVGOOD_SOURCE,
 }
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -467,6 +496,18 @@ def parse_targets(raw: str | list[str] | None) -> list[str]:
 
 def parse_target_value(target: str) -> dict[str, str]:
     normalized = normalize_target(target)
+    if normalized.lower().startswith("avgood:"):
+        value = normalize_avgood_target_value(normalized[len("avgood:") :].strip())
+        return {"source": AVGOOD_SOURCE, "kind": AVGOOD_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("avgood.com:"):
+        value = normalize_avgood_target_value(normalized[len("avgood.com:") :].strip())
+        return {"source": AVGOOD_SOURCE, "kind": AVGOOD_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if is_avgood_target_url(normalized):
+        value = normalize_avgood_target_value(normalized)
+        return {"source": AVGOOD_SOURCE, "kind": AVGOOD_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
     if normalized.lower().startswith("bdrq:"):
         value = normalize_bdrq_target_value(normalized[len("bdrq:") :].strip())
         return {"source": BDRQ_SOURCE, "kind": BDRQ_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
@@ -668,6 +709,8 @@ def format_target(kind: str, value: str) -> str:
 
 
 def format_target_row(target_row: dict) -> str:
+    if target_row.get("source") == AVGOOD_SOURCE:
+        return f"avgood:{target_row['value']}"
     if target_row.get("source") == BDRQ_SOURCE:
         return f"bdrq:{target_row['value']}"
     if target_row.get("source") == MTIF_SOURCE:
@@ -712,6 +755,8 @@ def normalized_presentation_source(source: str | None) -> str:
         return "twitter"
     if source_key in {"yt", "youtube"}:
         return "youtube"
+    if source_key in {"avgood", "avgood.com"}:
+        return AVGOOD_SOURCE
     if source_key in {"91", "cg91"}:
         return CG91_SOURCE
     if source_key in {"51", "baoliao51"}:
@@ -751,6 +796,7 @@ def source_display_name(source: str | None) -> str:
         MH18_SOURCE: MH18_SITE_NAME,
         ROU_SOURCE: ROU_SITE_NAME,
         DADAAFA_SOURCE: DADAAFA_SITE_NAME,
+        AVGOOD_SOURCE: AVGOOD_SITE_NAME,
         J18_SOURCE: J18_SITE_NAME,
         MTIF_SOURCE: MTIF_SITE_NAME,
         TIKPORN_SOURCE: TIKPORN_SITE_NAME,
@@ -3736,7 +3782,7 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
             DELETE FROM items i
             USING targets t
             WHERE t.id = i.target_id
-              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '18j')
+              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '18j', 'avgood')
               AND i.expires_at <= NOW()
             """
         )
@@ -3879,6 +3925,7 @@ def query_records(
                     WHEN t.source = 'dadaafa' THEN 'dadaafa:' || t.value
                     WHEN t.source = '91porna' THEN '91porna:' || t.value
                     WHEN t.source = '91porn' THEN '91porn:' || t.value
+                    WHEN t.source = 'avgood' THEN 'avgood:' || t.value
                     WHEN t.source = '18j' THEN '18j:' || t.value
                     WHEN t.kind = 'keyword' THEN 'search:' || t.value
                     ELSE t.value
@@ -4962,6 +5009,38 @@ def command_refresh_91porn_playback_urls(args) -> int:
     return 0
 
 
+def command_monitor_avgood(args) -> int:
+    base_url = args.base_url or AVGOOD_DEFAULT_BASE_URL
+    retention_hours = args.retention_hours if args.retention_hours is not None else AVGOOD_RETENTION_HOURS
+    if args.retention_days is not None:
+        retention_hours = args.retention_days * 24
+    max_records = args.max_records if args.max_records is not None else DEFAULT_MAX_RECORDS
+    if args.dry_run and not DATABASE_URL:
+        stats = monitor_avgood_site(None, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=True)
+        print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+        return 0
+    with get_db_connection() as conn:
+        stats = monitor_avgood_site(conn, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=args.dry_run)
+        if args.dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        if not args.skip_cleanup and not args.dry_run:
+            cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
+            conn.commit()
+            stats = {**stats, "cleanup": cleanup_stats}
+    print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+def command_refresh_avgood_playback_urls(args) -> int:
+    with get_db_connection() as conn:
+        stats = refresh_avgood_playback_urls(conn, limit=max(1, args.limit), refresh_window_minutes=max(1, args.refresh_window_minutes), critical_window_minutes=max(1, args.critical_window_minutes))
+        conn.commit()
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_monitor_badnews(args) -> int:
     base_url = args.base_url or BADNEWS_DEFAULT_BASE_URL
     retention_hours = args.retention_hours if args.retention_hours is not None else BADNEWS_RETENTION_HOURS
@@ -5216,6 +5295,17 @@ def build_parser() -> argparse.ArgumentParser:
     porn91_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
     porn91_monitor_parser.set_defaults(func=command_monitor_91porn)
 
+    avgood_monitor_parser = subparsers.add_parser("monitor-avgood", help="单独抓取 AvGood 视频并入库")
+    avgood_monitor_parser.add_argument("--base-url", default=AVGOOD_DEFAULT_BASE_URL, help="AvGood 站点入口；也可传 https://avgood.com/c/664/")
+    avgood_monitor_parser.add_argument("--max-pages", type=int, default=1, help="单次最多分页数")
+    avgood_monitor_parser.add_argument("--retention-hours", type=int, default=None, help="视频业务保留小时数，默认 84")
+    avgood_monitor_parser.add_argument("--retention-days", type=int, default=None, help="兼容旧参数：视频业务保留天数")
+    avgood_monitor_parser.add_argument("--max-records", type=int, default=None, help="最大保留记录数")
+    avgood_monitor_parser.add_argument("--skip-cleanup", action="store_true", help="本轮监控后不执行清理")
+    avgood_monitor_parser.add_argument("--private-pool", action="store_true", help="不加入公共视频池")
+    avgood_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
+    avgood_monitor_parser.set_defaults(func=command_monitor_avgood)
+
     badnews_monitor_parser = subparsers.add_parser("monitor-badnews", help="单独抓取 Bad.news 视频并入库")
     badnews_monitor_parser.add_argument("--base-url", default=BADNEWS_DEFAULT_BASE_URL, help="Bad.news 站点入口；也可传 https://bad.news/sort-new/page-1")
     badnews_monitor_parser.add_argument("--max-pages", type=int, default=2, help="单次最多分页数")
@@ -5341,6 +5431,12 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_porn91_parser.add_argument("--refresh-window-minutes", type=int, default=PORN91_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
     refresh_porn91_parser.add_argument("--critical-window-minutes", type=int, default=PORN91_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
     refresh_porn91_parser.set_defaults(func=command_refresh_91porn_playback_urls)
+
+    refresh_avgood_parser = subparsers.add_parser("refresh-avgood-playback-urls", help="刷新 AvGood 播放 URL（仅处理带过期时间的历史记录）")
+    refresh_avgood_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")
+    refresh_avgood_parser.add_argument("--refresh-window-minutes", type=int, default=AVGOOD_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
+    refresh_avgood_parser.add_argument("--critical-window-minutes", type=int, default=AVGOOD_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
+    refresh_avgood_parser.set_defaults(func=command_refresh_avgood_playback_urls)
 
     refresh_badnews_parser = subparsers.add_parser("refresh-badnews-playback-urls", help="刷新 Bad.news 播放 URL（仅处理带过期时间的历史记录）")
     refresh_badnews_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")

@@ -1,4 +1,4 @@
-export type TargetSource = "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin" | "18mh" | "rou" | "dadaafa" | "18j" | "1mtif" | "tikporn" | "91porna" | "91porn" | "badnews" | "bdrq";
+export type TargetSource = "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin" | "18mh" | "rou" | "dadaafa" | "18j" | "1mtif" | "tikporn" | "91porna" | "91porn" | "badnews" | "bdrq" | "avgood";
 export type TargetKind = "user" | "keyword" | "channel" | "site";
 
 export type ParsedTarget = {
@@ -29,6 +29,7 @@ const PORNA91_DEFAULT_URL = "https://91porna.com";
 const PORN91_DEFAULT_URL = "https://91porn.com";
 const BADNEWS_DEFAULT_URL = "https://bad.news";
 const BDRQ_DEFAULT_URL = "https://g3h4i5j6.bdrq45.cc";
+const AVGOOD_DEFAULT_URL = "https://avgood.com";
 
 function normalizeHeiliaoTargetValue(raw: string) {
   const value = (raw.trim() || HEILIAO_DEFAULT_URL).replace(/\/+$/, "");
@@ -302,6 +303,25 @@ function isBdrqTargetURL(raw: string) {
   }
 }
 
+function normalizeAvGoodTargetValue(raw: string) {
+  const value = (raw.trim() || AVGOOD_DEFAULT_URL).replace(/\/+$/, "");
+  const url = new URL(value.includes("://") ? value : `https://${value}`);
+  return `${url.protocol}//${url.host.toLowerCase()}`;
+}
+
+function isAvGoodTargetURL(raw: string) {
+  try {
+    const value = raw.trim();
+    if (!value) {
+      return false;
+    }
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.host.toLowerCase() === "avgood.com" || url.host.toLowerCase() === "www.avgood.com";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeYouTubeChannelID(raw: string) {
   const value = raw.trim();
   if (!value) {
@@ -417,6 +437,21 @@ export function parseTarget(raw: string): ParsedTarget {
   const value = raw.trim();
   if (!value) {
     throw new Error("Target cannot be empty.");
+  }
+
+  if (value.toLowerCase().startsWith("avgood:")) {
+    const normalized = normalizeAvGoodTargetValue(value.slice("avgood:".length));
+    return { source: "avgood", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("avgood.com:")) {
+    const normalized = normalizeAvGoodTargetValue(value.slice("avgood.com:".length));
+    return { source: "avgood", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (isAvGoodTargetURL(value)) {
+    const normalized = normalizeAvGoodTargetValue(value);
+    return { source: "avgood", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   }
 
   if (value.toLowerCase().startsWith("bdrq:")) {
@@ -659,6 +694,9 @@ export function parseTarget(raw: string): ParsedTarget {
 }
 
 export function formatTarget(target: ParsedTarget | { source?: TargetSource; kind: TargetKind; value: string }): string {
+  if (target.source === "avgood") {
+    return `avgood:${target.value}`;
+  }
   if (target.source === "bdrq") {
     return `bdrq:${target.value}`;
   }
@@ -812,6 +850,9 @@ function normalizeTargetSource(rawSource: unknown): TargetSource {
     case "badnews":
     case "bad.news":
       return "badnews";
+    case "avgood":
+    case "avgood.com":
+      return "avgood";
     case "bdrq":
     case "bdrq45":
     case "bdrq45.cc":
@@ -927,6 +968,12 @@ function normalizeTargetKind(rawKind: unknown, source: TargetSource): TargetKind
     }
     throw new Error("Bad.news targets must use site kind.");
   }
+  if (source === "avgood") {
+    if (kind === "site") {
+      return "site";
+    }
+    throw new Error("AvGood targets must use site kind.");
+  }
   if (source === "bdrq") {
     if (kind === "site") {
       return "site";
@@ -1009,6 +1056,9 @@ function parseObjectTarget(candidate: { source?: unknown; kind?: unknown; target
     parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   } else if (source === "badnews") {
     const normalized = normalizeBadNewsTargetValue(candidate.target);
+    parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  } else if (source === "avgood") {
+    const normalized = normalizeAvGoodTargetValue(candidate.target);
     parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   } else if (source === "bdrq") {
     const normalized = normalizeBdrqTargetValue(candidate.target);

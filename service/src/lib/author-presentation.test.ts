@@ -37,6 +37,7 @@ test("buildAuthorPresentation uses item detail links for site sources", () => {
     ["91porn", "91porn", "https://91porn.com/view_video.php?viewkey=abc123"],
     ["badnews", "Bad.news", "https://bad.news/t/6227046"],
     ["bdrq", "背德人妻", "https://g3h4i5j6.bdrq45.cc/voddetail/769512.html"],
+    ["avgood", "AvGood", "https://avgood.com/c/663855.html"],
   ] as const;
 
   for (const [source, platform, link] of cases) {

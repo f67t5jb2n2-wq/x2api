@@ -14,6 +14,7 @@ export async function GET(request: Request) {
     const sourceUrl = validateCleanHlsUrl(decodeHlsCleanParam(searchParams.get("u"), "u"));
     const referer = validateCleanHlsReferer(decodeHlsCleanParam(searchParams.get("r"), "r"));
     const contentPathPrefix = validateContentPathPrefix(decodeHlsCleanParam(searchParams.get("p"), "p"));
+    const rewriteOnly = searchParams.get("rw") === "1" || searchParams.get("rewriteOnly") === "1";
 
     const upstream = await fetch(sourceUrl, {
       headers: {
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
       playlist: await upstream.text(),
       contentPathPrefix,
     });
-    if (result.removedSegments === 0) {
+    if (result.removedSegments === 0 && !rewriteOnly) {
       return new Response("HLS playlist did not contain removable ad segments.", { status: 422 });
     }
 

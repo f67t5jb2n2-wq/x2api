@@ -1,6 +1,6 @@
-const HLS_CLEAN_ALLOWED_SOURCE_HOSTS = [/^(?:m3u8|video)\.cdn\d+\.com$/, /^t\d+\.cdn2020\.com$/, /^kjbwhcnao\.com$/];
+const HLS_CLEAN_ALLOWED_SOURCE_HOSTS = [/^(?:m3u8|video)\.cdn\d+\.com$/, /^t\d+\.cdn2020\.com$/, /^kjbwhcnao\.com$/, /^(?:www\.)?avgood\.com$/];
 const HLS_CLEAN_ALLOWED_RESOURCE_HOSTS = [...HLS_CLEAN_ALLOWED_SOURCE_HOSTS, /^tsbfask\.com$/];
-const HLS_CLEAN_ALLOWED_REFERER_HOSTS = new Set(["18j.tv", "www.18j.tv"]);
+const HLS_CLEAN_ALLOWED_REFERER_HOSTS = new Set(["18j.tv", "www.18j.tv", "avgood.com", "www.avgood.com"]);
 
 export type CleanHlsResult = {
   playlist: string;
@@ -72,11 +72,29 @@ export function validateContentPathPrefix(rawPrefix: string) {
   const supported =
     /^\/videos\/\d{6}\/\d{2}\/[A-Za-z0-9]+\/$/.test(rawPrefix) ||
     /^\/\d{8}\/[A-Za-z0-9]+\/\d+kb\/hls\/$/.test(rawPrefix) ||
-    /^\/video\/m3u8\/\d{4}\/\d{2}\/\d{2}\/[A-Za-z0-9]+\/$/.test(rawPrefix);
+    /^\/video\/m3u8\/\d{4}\/\d{2}\/\d{2}\/[A-Za-z0-9]+\/$/.test(rawPrefix) ||
+    /^\/remote_m3u8\/data_\d+\/video\/m3u8\/[A-Za-z0-9%._~-]+(?:(?:%2F|\/)[A-Za-z0-9%._~-]+)*(?:%2F|\/)ts(?:%2F|\/)$/i.test(rawPrefix);
   if (!supported) {
     throw new Error("Unsupported HLS content prefix.");
   }
   return rawPrefix;
+}
+
+function resolveHlsResourceUrl(value: string, sourceUrl: URL, contentPathPrefix?: string) {
+  const raw = value.trim();
+  if (!raw || raw.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) {
+    return new URL(raw, sourceUrl);
+  }
+  if (contentPathPrefix) {
+    return new URL(`${contentPathPrefix}${raw}`, sourceUrl.origin);
+  }
+  const lowerPath = sourceUrl.pathname.toLowerCase();
+  const lastEncodedSlash = lowerPath.lastIndexOf("%2f");
+  if (lastEncodedSlash >= 0) {
+    const prefix = sourceUrl.pathname.slice(0, lastEncodedSlash + 3);
+    return new URL(`${prefix}${raw}`, sourceUrl.origin);
+  }
+  return new URL(raw, sourceUrl);
 }
 
 function rewriteKeyLine(line: string, sourceUrl: URL, contentPathPrefix: string) {
@@ -84,7 +102,7 @@ function rewriteKeyLine(line: string, sourceUrl: URL, contentPathPrefix: string)
   if (!match) {
     return line;
   }
-  const keyUrl = new URL(match[1]!, sourceUrl);
+  const keyUrl = resolveHlsResourceUrl(match[1]!, sourceUrl, contentPathPrefix);
   if (!isAllowedResourceHost(keyUrl.hostname) || !keyUrl.pathname.startsWith(contentPathPrefix)) {
     return null;
   }
@@ -133,7 +151,7 @@ export function cleanHlsPlaylist(input: {
       continue;
     }
 
-    const segmentUrl = new URL(line, sourceUrl);
+    const segmentUrl = resolveHlsResourceUrl(line, sourceUrl, contentPathPrefix);
     if (isAllowedResourceHost(segmentUrl.hostname) && segmentUrl.pathname.startsWith(contentPathPrefix)) {
       for (const pendingLine of pending) {
         if (pendingLine.startsWith("#EXT-X-KEY")) {
@@ -164,6 +182,7 @@ export function cleanHlsPlaylist(input: {
   };
 }
 
-export function buildCleanHlsPath(input: { sourceUrl: string; referer: string; contentPathPrefix: string }) {
-  return `/api/hls/clean?u=${encodeHlsCleanParam(input.sourceUrl)}&r=${encodeHlsCleanParam(input.referer)}&p=${encodeHlsCleanParam(input.contentPathPrefix)}`;
+export function buildCleanHlsPath(input: { sourceUrl: string; referer: string; contentPathPrefix: string; rewriteOnly?: boolean }) {
+  const path = `/api/hls/clean?u=${encodeHlsCleanParam(input.sourceUrl)}&r=${encodeHlsCleanParam(input.referer)}&p=${encodeHlsCleanParam(input.contentPathPrefix)}`;
+  return input.rewriteOnly ? `${path}&rw=1` : path;
 }

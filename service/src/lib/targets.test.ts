@@ -191,6 +191,24 @@ test("parseTarget understands Bad.news site targets", () => {
   });
 });
 
+test("parseTarget understands AvGood site targets", () => {
+  assert.deepEqual(parseTarget("https://avgood.com/c/664/"), {
+    source: "avgood",
+    kind: "site",
+    value: "https://avgood.com",
+    normalizedValue: "avgood.com",
+    tags: [],
+  });
+
+  assert.deepEqual(parseTarget("avgood:avgood.com/c/664/"), {
+    source: "avgood",
+    kind: "site",
+    value: "https://avgood.com",
+    normalizedValue: "avgood.com",
+    tags: [],
+  });
+});
+
 test("parseTarget understands BDRQ site targets", () => {
   assert.deepEqual(parseTarget("https://g3h4i5j6.bdrq45.cc/vodtype/4.html"), {
     source: "bdrq",
@@ -400,6 +418,17 @@ test("parseTargets normalizes explicit source aliases", () => {
       kind: "site",
       value: "https://bad.news",
       normalizedValue: "bad.news",
+      category: "adult",
+      tags: [],
+    },
+  ]);
+
+  assert.deepEqual(parseTargets([{ source: "avgood.com", kind: "site", target: "avgood.com/c/664/", category: "adult" }]), [
+    {
+      source: "avgood",
+      kind: "site",
+      value: "https://avgood.com",
+      normalizedValue: "avgood.com",
       category: "adult",
       tags: [],
     },
@@ -643,6 +672,29 @@ test("parseTargets accepts explicit 1mtif object targets", () => {
       normalizedValue: "1mtif.sbs",
       category: "adult",
       tags: ["蜜桃视频", "视频"],
+    },
+  ]);
+});
+
+test("parseTargets accepts explicit AvGood object targets", () => {
+  const targets = parseTargets([
+    {
+      source: "avgood",
+      kind: "site",
+      target: "https://avgood.com/c/664/",
+      category: "adult",
+      tags: ["AvGood", "video"],
+    },
+  ]);
+
+  assert.deepEqual(targets, [
+    {
+      source: "avgood",
+      kind: "site",
+      value: "https://avgood.com",
+      normalizedValue: "avgood.com",
+      category: "adult",
+      tags: ["AvGood", "video"],
     },
   ]);
 });

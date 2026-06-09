@@ -1,4 +1,4 @@
-export type TargetSource = "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin" | "18mh" | "rou" | "dadaafa" | "18j" | "1mtif" | "tikporn" | "91porna" | "91porn" | "badnews" | "bdrq" | "avgood";
+export type TargetSource = "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin" | "18mh" | "rou" | "dadaafa" | "18j" | "1mtif" | "tikporn" | "91porna" | "91porn" | "badnews" | "bdrq" | "avgood" | "705hs";
 export type TargetKind = "user" | "keyword" | "channel" | "site";
 
 export type ParsedTarget = {
@@ -30,6 +30,7 @@ const PORN91_DEFAULT_URL = "https://91porn.com";
 const BADNEWS_DEFAULT_URL = "https://bad.news";
 const BDRQ_DEFAULT_URL = "https://g3h4i5j6.bdrq45.cc";
 const AVGOOD_DEFAULT_URL = "https://avgood.com";
+const HS705_DEFAULT_URL = "https://705hs.com";
 
 function normalizeHeiliaoTargetValue(raw: string) {
   const value = (raw.trim() || HEILIAO_DEFAULT_URL).replace(/\/+$/, "");
@@ -322,6 +323,25 @@ function isAvGoodTargetURL(raw: string) {
   }
 }
 
+function normalizeHs705TargetValue(raw: string) {
+  const value = (raw.trim() || HS705_DEFAULT_URL).replace(/\/+$/, "");
+  const url = new URL(value.includes("://") ? value : `https://${value}`);
+  return `${url.protocol}//${url.host.toLowerCase()}`;
+}
+
+function isHs705TargetURL(raw: string) {
+  try {
+    const value = raw.trim();
+    if (!value) {
+      return false;
+    }
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.host.toLowerCase() === "705hs.com" || url.host.toLowerCase() === "www.705hs.com";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeYouTubeChannelID(raw: string) {
   const value = raw.trim();
   if (!value) {
@@ -452,6 +472,31 @@ export function parseTarget(raw: string): ParsedTarget {
   if (isAvGoodTargetURL(value)) {
     const normalized = normalizeAvGoodTargetValue(value);
     return { source: "avgood", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("705hs:")) {
+    const normalized = normalizeHs705TargetValue(value.slice("705hs:".length));
+    return { source: "705hs", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("705hs.com:")) {
+    const normalized = normalizeHs705TargetValue(value.slice("705hs.com:".length));
+    return { source: "705hs", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("992kp:")) {
+    const normalized = normalizeHs705TargetValue(value.slice("992kp:".length));
+    return { source: "705hs", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("992kp.com:")) {
+    const normalized = normalizeHs705TargetValue(value.slice("992kp.com:".length));
+    return { source: "705hs", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (isHs705TargetURL(value)) {
+    const normalized = normalizeHs705TargetValue(value);
+    return { source: "705hs", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   }
 
   if (value.toLowerCase().startsWith("bdrq:")) {
@@ -697,6 +742,9 @@ export function formatTarget(target: ParsedTarget | { source?: TargetSource; kin
   if (target.source === "avgood") {
     return `avgood:${target.value}`;
   }
+  if (target.source === "705hs") {
+    return `705hs:${target.value}`;
+  }
   if (target.source === "bdrq") {
     return `bdrq:${target.value}`;
   }
@@ -853,6 +901,11 @@ function normalizeTargetSource(rawSource: unknown): TargetSource {
     case "avgood":
     case "avgood.com":
       return "avgood";
+    case "705hs":
+    case "705hs.com":
+    case "992kp":
+    case "992kp.com":
+      return "705hs";
     case "bdrq":
     case "bdrq45":
     case "bdrq45.cc":
@@ -974,6 +1027,12 @@ function normalizeTargetKind(rawKind: unknown, source: TargetSource): TargetKind
     }
     throw new Error("AvGood targets must use site kind.");
   }
+  if (source === "705hs") {
+    if (kind === "site") {
+      return "site";
+    }
+    throw new Error("705hs targets must use site kind.");
+  }
   if (source === "bdrq") {
     if (kind === "site") {
       return "site";
@@ -1059,6 +1118,9 @@ function parseObjectTarget(candidate: { source?: unknown; kind?: unknown; target
     parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   } else if (source === "avgood") {
     const normalized = normalizeAvGoodTargetValue(candidate.target);
+    parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  } else if (source === "705hs") {
+    const normalized = normalizeHs705TargetValue(candidate.target);
     parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   } else if (source === "bdrq") {
     const normalized = normalizeBdrqTargetValue(candidate.target);

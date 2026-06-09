@@ -68,6 +68,20 @@ try:
         refresh_playback_urls as refresh_bdrq_playback_urls,
         upsert_video_item as upsert_bdrq_video_item,
     )
+    from collector.hs705_source import (
+        HS705_CRITICAL_WINDOW_MINUTES,
+        HS705_DEFAULT_BASE_URL,
+        HS705_KIND,
+        HS705_REFRESH_WINDOW_MINUTES,
+        HS705_RETENTION_HOURS,
+        HS705_SITE_NAME,
+        HS705_SOURCE,
+        is_hs705_target_url,
+        monitor_site as monitor_hs705_site,
+        normalize_hs705_target_value,
+        refresh_playback_urls as refresh_hs705_playback_urls,
+        upsert_video_item as upsert_hs705_video_item,
+    )
     from collector.dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
         DADAAFA_DEFAULT_BASE_URL,
@@ -219,6 +233,20 @@ except ModuleNotFoundError:
         normalize_bdrq_target_value,
         refresh_playback_urls as refresh_bdrq_playback_urls,
         upsert_video_item as upsert_bdrq_video_item,
+    )
+    from hs705_source import (
+        HS705_CRITICAL_WINDOW_MINUTES,
+        HS705_DEFAULT_BASE_URL,
+        HS705_KIND,
+        HS705_REFRESH_WINDOW_MINUTES,
+        HS705_RETENTION_HOURS,
+        HS705_SITE_NAME,
+        HS705_SOURCE,
+        is_hs705_target_url,
+        monitor_site as monitor_hs705_site,
+        normalize_hs705_target_value,
+        refresh_playback_urls as refresh_hs705_playback_urls,
+        upsert_video_item as upsert_hs705_video_item,
     )
     from dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
@@ -388,6 +416,7 @@ DETAIL_LINK_PROFILE_SOURCES = {
     J18_SOURCE,
     BDRQ_SOURCE,
     AVGOOD_SOURCE,
+    HS705_SOURCE,
 }
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -507,6 +536,26 @@ def parse_target_value(target: str) -> dict[str, str]:
     if is_avgood_target_url(normalized):
         value = normalize_avgood_target_value(normalized)
         return {"source": AVGOOD_SOURCE, "kind": AVGOOD_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("705hs:"):
+        value = normalize_hs705_target_value(normalized[len("705hs:") :].strip())
+        return {"source": HS705_SOURCE, "kind": HS705_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("705hs.com:"):
+        value = normalize_hs705_target_value(normalized[len("705hs.com:") :].strip())
+        return {"source": HS705_SOURCE, "kind": HS705_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("992kp:"):
+        value = normalize_hs705_target_value(normalized[len("992kp:") :].strip())
+        return {"source": HS705_SOURCE, "kind": HS705_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("992kp.com:"):
+        value = normalize_hs705_target_value(normalized[len("992kp.com:") :].strip())
+        return {"source": HS705_SOURCE, "kind": HS705_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if is_hs705_target_url(normalized):
+        value = normalize_hs705_target_value(normalized)
+        return {"source": HS705_SOURCE, "kind": HS705_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
 
     if normalized.lower().startswith("bdrq:"):
         value = normalize_bdrq_target_value(normalized[len("bdrq:") :].strip())
@@ -711,6 +760,8 @@ def format_target(kind: str, value: str) -> str:
 def format_target_row(target_row: dict) -> str:
     if target_row.get("source") == AVGOOD_SOURCE:
         return f"avgood:{target_row['value']}"
+    if target_row.get("source") == HS705_SOURCE:
+        return f"705hs:{target_row['value']}"
     if target_row.get("source") == BDRQ_SOURCE:
         return f"bdrq:{target_row['value']}"
     if target_row.get("source") == MTIF_SOURCE:
@@ -757,6 +808,8 @@ def normalized_presentation_source(source: str | None) -> str:
         return "youtube"
     if source_key in {"avgood", "avgood.com"}:
         return AVGOOD_SOURCE
+    if source_key in {"705hs", "705hs.com", "992kp", "992kp.com"}:
+        return HS705_SOURCE
     if source_key in {"91", "cg91"}:
         return CG91_SOURCE
     if source_key in {"51", "baoliao51"}:
@@ -797,6 +850,7 @@ def source_display_name(source: str | None) -> str:
         ROU_SOURCE: ROU_SITE_NAME,
         DADAAFA_SOURCE: DADAAFA_SITE_NAME,
         AVGOOD_SOURCE: AVGOOD_SITE_NAME,
+        HS705_SOURCE: HS705_SITE_NAME,
         J18_SOURCE: J18_SITE_NAME,
         MTIF_SOURCE: MTIF_SITE_NAME,
         TIKPORN_SOURCE: TIKPORN_SITE_NAME,
@@ -3782,7 +3836,7 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
             DELETE FROM items i
             USING targets t
             WHERE t.id = i.target_id
-              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '18j', 'avgood')
+              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '18j', 'avgood', '705hs')
               AND i.expires_at <= NOW()
             """
         )
@@ -3926,6 +3980,7 @@ def query_records(
                     WHEN t.source = '91porna' THEN '91porna:' || t.value
                     WHEN t.source = '91porn' THEN '91porn:' || t.value
                     WHEN t.source = 'avgood' THEN 'avgood:' || t.value
+                    WHEN t.source = '705hs' THEN '705hs:' || t.value
                     WHEN t.source = '18j' THEN '18j:' || t.value
                     WHEN t.kind = 'keyword' THEN 'search:' || t.value
                     ELSE t.value
@@ -5041,6 +5096,38 @@ def command_refresh_avgood_playback_urls(args) -> int:
     return 0
 
 
+def command_monitor_705hs(args) -> int:
+    base_url = args.base_url or HS705_DEFAULT_BASE_URL
+    retention_hours = args.retention_hours if args.retention_hours is not None else HS705_RETENTION_HOURS
+    if args.retention_days is not None:
+        retention_hours = args.retention_days * 24
+    max_records = args.max_records if args.max_records is not None else DEFAULT_MAX_RECORDS
+    if args.dry_run and not DATABASE_URL:
+        stats = monitor_hs705_site(None, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=True)
+        print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+        return 0
+    with get_db_connection() as conn:
+        stats = monitor_hs705_site(conn, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=args.dry_run)
+        if args.dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        if not args.skip_cleanup and not args.dry_run:
+            cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
+            conn.commit()
+            stats = {**stats, "cleanup": cleanup_stats}
+    print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+def command_refresh_705hs_playback_urls(args) -> int:
+    with get_db_connection() as conn:
+        stats = refresh_hs705_playback_urls(conn, limit=max(1, args.limit), refresh_window_minutes=max(1, args.refresh_window_minutes), critical_window_minutes=max(1, args.critical_window_minutes))
+        conn.commit()
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_monitor_badnews(args) -> int:
     base_url = args.base_url or BADNEWS_DEFAULT_BASE_URL
     retention_hours = args.retention_hours if args.retention_hours is not None else BADNEWS_RETENTION_HOURS
@@ -5306,6 +5393,17 @@ def build_parser() -> argparse.ArgumentParser:
     avgood_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
     avgood_monitor_parser.set_defaults(func=command_monitor_avgood)
 
+    hs705_monitor_parser = subparsers.add_parser("monitor-705hs", help="单独抓取 992KP/705hs 视频并入库")
+    hs705_monitor_parser.add_argument("--base-url", default=HS705_DEFAULT_BASE_URL, help="705hs 站点入口；也可传 https://705hs.com/Html/60/index-1.html")
+    hs705_monitor_parser.add_argument("--max-pages", type=int, default=1, help="单次最多分页数")
+    hs705_monitor_parser.add_argument("--retention-hours", type=int, default=None, help="视频业务保留小时数，默认 84")
+    hs705_monitor_parser.add_argument("--retention-days", type=int, default=None, help="兼容旧参数：视频业务保留天数")
+    hs705_monitor_parser.add_argument("--max-records", type=int, default=None, help="最大保留记录数")
+    hs705_monitor_parser.add_argument("--skip-cleanup", action="store_true", help="本轮监控后不执行清理")
+    hs705_monitor_parser.add_argument("--private-pool", action="store_true", help="不加入公共视频池")
+    hs705_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
+    hs705_monitor_parser.set_defaults(func=command_monitor_705hs)
+
     badnews_monitor_parser = subparsers.add_parser("monitor-badnews", help="单独抓取 Bad.news 视频并入库")
     badnews_monitor_parser.add_argument("--base-url", default=BADNEWS_DEFAULT_BASE_URL, help="Bad.news 站点入口；也可传 https://bad.news/sort-new/page-1")
     badnews_monitor_parser.add_argument("--max-pages", type=int, default=2, help="单次最多分页数")
@@ -5437,6 +5535,12 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_avgood_parser.add_argument("--refresh-window-minutes", type=int, default=AVGOOD_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
     refresh_avgood_parser.add_argument("--critical-window-minutes", type=int, default=AVGOOD_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
     refresh_avgood_parser.set_defaults(func=command_refresh_avgood_playback_urls)
+
+    refresh_hs705_parser = subparsers.add_parser("refresh-705hs-playback-urls", help="刷新 992KP/705hs 播放 URL（仅处理带过期时间的历史记录）")
+    refresh_hs705_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")
+    refresh_hs705_parser.add_argument("--refresh-window-minutes", type=int, default=HS705_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
+    refresh_hs705_parser.add_argument("--critical-window-minutes", type=int, default=HS705_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
+    refresh_hs705_parser.set_defaults(func=command_refresh_705hs_playback_urls)
 
     refresh_badnews_parser = subparsers.add_parser("refresh-badnews-playback-urls", help="刷新 Bad.news 播放 URL（仅处理带过期时间的历史记录）")
     refresh_badnews_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")

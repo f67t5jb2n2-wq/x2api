@@ -209,6 +209,24 @@ test("parseTarget understands AvGood site targets", () => {
   });
 });
 
+test("parseTarget understands 705hs site targets", () => {
+  assert.deepEqual(parseTarget("https://705hs.com/Html/60/index-1.html"), {
+    source: "705hs",
+    kind: "site",
+    value: "https://705hs.com",
+    normalizedValue: "705hs.com",
+    tags: [],
+  });
+
+  assert.deepEqual(parseTarget("992kp:705hs.com/Html/91/50710.html"), {
+    source: "705hs",
+    kind: "site",
+    value: "https://705hs.com",
+    normalizedValue: "705hs.com",
+    tags: [],
+  });
+});
+
 test("parseTarget understands BDRQ site targets", () => {
   assert.deepEqual(parseTarget("https://g3h4i5j6.bdrq45.cc/vodtype/4.html"), {
     source: "bdrq",
@@ -429,6 +447,17 @@ test("parseTargets normalizes explicit source aliases", () => {
       kind: "site",
       value: "https://avgood.com",
       normalizedValue: "avgood.com",
+      category: "adult",
+      tags: [],
+    },
+  ]);
+
+  assert.deepEqual(parseTargets([{ source: "992kp", kind: "site", target: "705hs.com/Html/60/index-1.html", category: "adult" }]), [
+    {
+      source: "705hs",
+      kind: "site",
+      value: "https://705hs.com",
+      normalizedValue: "705hs.com",
       category: "adult",
       tags: [],
     },

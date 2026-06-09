@@ -31,6 +31,7 @@ const DETAIL_LINK_PROFILE_PLATFORMS: Record<string, string> = {
   badnews: "Bad.news",
   bdrq: "背德人妻",
   avgood: "AvGood",
+  "705hs": "992KP",
 };
 
 export function buildAuthorPresentation(input: AuthorPresentationInput): AuthorPresentation {
@@ -105,6 +106,11 @@ export function normalizePresentationSource(value: string) {
     case "avgood":
     case "avgood.com":
       return "avgood";
+    case "705hs":
+    case "705hs.com":
+    case "992kp":
+    case "992kp.com":
+      return "705hs";
     case "bdrq":
     case "bdrq45":
     case "bdrq45.cc":
@@ -182,6 +188,8 @@ function sourceDisplayName(source: string) {
       return "背德人妻";
     case "avgood":
       return "AvGood";
+    case "705hs":
+      return "992KP";
     default:
       return source || "X";
   }

@@ -29,6 +29,7 @@ const DETAIL_LINK_PROFILE_PLATFORMS: Record<string, string> = {
   "91porna": "91porna",
   "91porn": "91porn",
   badnews: "Bad.news",
+  bdrq: "背德人妻",
 };
 
 export function buildAuthorPresentation(input: AuthorPresentationInput): AuthorPresentation {
@@ -100,6 +101,12 @@ export function normalizePresentationSource(value: string) {
     case "badnews":
     case "bad.news":
       return "badnews";
+    case "bdrq":
+    case "bdrq45":
+    case "bdrq45.cc":
+    case "bdrq12":
+    case "bdrq12.cc":
+      return "bdrq";
     case "91porn":
     case "91porn.com":
       return "91porn";
@@ -167,6 +174,8 @@ function sourceDisplayName(source: string) {
       return "91porn";
     case "badnews":
       return "Bad.news";
+    case "bdrq":
+      return "背德人妻";
     default:
       return source || "X";
   }

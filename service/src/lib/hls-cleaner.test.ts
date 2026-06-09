@@ -37,3 +37,25 @@ test("buildCleanHlsPath produces a relative service URL", () => {
 
   assert.match(path, /^\/api\/hls\/clean\?/);
 });
+
+test("cleanHlsPlaylist keeps bdrq CDN content and removes injected paths", () => {
+  const result = cleanHlsPlaylist({
+    sourceUrl: "https://kjbwhcnao.com/20260608/g4jGnAUr/2000kb/hls/index.m3u8",
+    contentPathPrefix: "/20260608/g4jGnAUr/2000kb/hls/",
+    playlist: `#EXTM3U
+#EXT-X-VERSION:3
+#EXTINF:4.0,
+https://kjbwhcnao.com/20260604/I6vsA78Y/2000kb/hls/ad0.ts
+#EXT-X-KEY:METHOD=AES-128,URI="https://tsbfask.com:65/20260608/g4jGnAUr/2000kb/hls/key.key",IV=0x00000000000000000000000000000001
+#EXTINF:4.0,
+https://tsbfask.com:65/20260608/g4jGnAUr/2000kb/hls/index0.ts
+#EXT-X-ENDLIST
+`,
+  });
+
+  assert.equal(result.keptSegments, 1);
+  assert.equal(result.removedSegments, 1);
+  assert.match(result.playlist, /https:\/\/tsbfask\.com:65\/20260608\/g4jGnAUr\/2000kb\/hls\/key\.key/);
+  assert.match(result.playlist, /https:\/\/tsbfask\.com:65\/20260608\/g4jGnAUr\/2000kb\/hls\/index0\.ts/);
+  assert.doesNotMatch(result.playlist, /I6vsA78Y/);
+});

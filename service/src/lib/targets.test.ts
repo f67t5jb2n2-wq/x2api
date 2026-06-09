@@ -191,6 +191,24 @@ test("parseTarget understands Bad.news site targets", () => {
   });
 });
 
+test("parseTarget understands BDRQ site targets", () => {
+  assert.deepEqual(parseTarget("https://g3h4i5j6.bdrq45.cc/vodtype/4.html"), {
+    source: "bdrq",
+    kind: "site",
+    value: "https://g3h4i5j6.bdrq45.cc",
+    normalizedValue: "g3h4i5j6.bdrq45.cc",
+    tags: [],
+  });
+
+  assert.deepEqual(parseTarget("bdrq45:g3h4i5j6.bdrq45.cc/vodshow/181-----------.html"), {
+    source: "bdrq",
+    kind: "site",
+    value: "https://g3h4i5j6.bdrq45.cc",
+    normalizedValue: "g3h4i5j6.bdrq45.cc",
+    tags: [],
+  });
+});
+
 test("parseTargets deduplicates normalized values", () => {
   const targets = parseTargets(["OpenAI", "openai", "search:AI", "search:ai", "youtube:UCE_M8A5yxnLfW0KghEeajjw"]);
   assert.equal(targets.length, 3);
@@ -382,6 +400,17 @@ test("parseTargets normalizes explicit source aliases", () => {
       kind: "site",
       value: "https://bad.news",
       normalizedValue: "bad.news",
+      category: "adult",
+      tags: [],
+    },
+  ]);
+
+  assert.deepEqual(parseTargets([{ source: "bdrq45", kind: "site", target: "g3h4i5j6.bdrq45.cc/vodtype/4.html", category: "adult" }]), [
+    {
+      source: "bdrq",
+      kind: "site",
+      value: "https://g3h4i5j6.bdrq45.cc",
+      normalizedValue: "g3h4i5j6.bdrq45.cc",
       category: "adult",
       tags: [],
     },

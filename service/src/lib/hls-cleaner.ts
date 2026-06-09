@@ -1,4 +1,5 @@
-const HLS_CLEAN_ALLOWED_SOURCE_HOSTS = [/^(?:m3u8|video)\.cdn\d+\.com$/];
+const HLS_CLEAN_ALLOWED_SOURCE_HOSTS = [/^(?:m3u8|video)\.cdn\d+\.com$/, /^t\d+\.cdn2020\.com$/, /^kjbwhcnao\.com$/];
+const HLS_CLEAN_ALLOWED_RESOURCE_HOSTS = [...HLS_CLEAN_ALLOWED_SOURCE_HOSTS, /^tsbfask\.com$/];
 const HLS_CLEAN_ALLOWED_REFERER_HOSTS = new Set(["18j.tv", "www.18j.tv"]);
 
 export type CleanHlsResult = {
@@ -9,6 +10,21 @@ export type CleanHlsResult = {
 
 function isAllowedSourceHost(host: string) {
   return HLS_CLEAN_ALLOWED_SOURCE_HOSTS.some((pattern) => pattern.test(host.toLowerCase()));
+}
+
+function isAllowedResourceHost(host: string) {
+  return HLS_CLEAN_ALLOWED_RESOURCE_HOSTS.some((pattern) => pattern.test(host.toLowerCase()));
+}
+
+function isAllowedRefererHost(host: string) {
+  const normalized = host.toLowerCase();
+  return (
+    HLS_CLEAN_ALLOWED_REFERER_HOSTS.has(normalized) ||
+    normalized === "bdrq45.cc" ||
+    normalized.endsWith(".bdrq45.cc") ||
+    normalized === "bdrq12.cc" ||
+    normalized.endsWith(".bdrq12.cc")
+  );
 }
 
 export function encodeHlsCleanParam(value: string) {
@@ -46,14 +62,18 @@ export function validateCleanHlsReferer(rawReferer: string) {
   } catch {
     throw new Error("Invalid HLS referer.");
   }
-  if (referer.protocol !== "https:" || !HLS_CLEAN_ALLOWED_REFERER_HOSTS.has(referer.hostname.toLowerCase())) {
+  if (referer.protocol !== "https:" || !isAllowedRefererHost(referer.hostname)) {
     throw new Error("Unsupported HLS referer.");
   }
   return referer;
 }
 
 export function validateContentPathPrefix(rawPrefix: string) {
-  if (!/^\/videos\/\d{6}\/\d{2}\/[A-Za-z0-9]+\/$/.test(rawPrefix)) {
+  const supported =
+    /^\/videos\/\d{6}\/\d{2}\/[A-Za-z0-9]+\/$/.test(rawPrefix) ||
+    /^\/\d{8}\/[A-Za-z0-9]+\/\d+kb\/hls\/$/.test(rawPrefix) ||
+    /^\/video\/m3u8\/\d{4}\/\d{2}\/\d{2}\/[A-Za-z0-9]+\/$/.test(rawPrefix);
+  if (!supported) {
     throw new Error("Unsupported HLS content prefix.");
   }
   return rawPrefix;
@@ -65,7 +85,7 @@ function rewriteKeyLine(line: string, sourceUrl: URL, contentPathPrefix: string)
     return line;
   }
   const keyUrl = new URL(match[1]!, sourceUrl);
-  if (!isAllowedSourceHost(keyUrl.hostname) || !keyUrl.pathname.startsWith(contentPathPrefix)) {
+  if (!isAllowedResourceHost(keyUrl.hostname) || !keyUrl.pathname.startsWith(contentPathPrefix)) {
     return null;
   }
   return line.replace(match[1]!, keyUrl.toString());
@@ -114,7 +134,7 @@ export function cleanHlsPlaylist(input: {
     }
 
     const segmentUrl = new URL(line, sourceUrl);
-    if (isAllowedSourceHost(segmentUrl.hostname) && segmentUrl.pathname.startsWith(contentPathPrefix)) {
+    if (isAllowedResourceHost(segmentUrl.hostname) && segmentUrl.pathname.startsWith(contentPathPrefix)) {
       for (const pendingLine of pending) {
         if (pendingLine.startsWith("#EXT-X-KEY")) {
           const rewritten = rewriteKeyLine(pendingLine, sourceUrl, contentPathPrefix);

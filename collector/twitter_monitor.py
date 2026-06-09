@@ -40,6 +40,20 @@ try:
         refresh_playback_urls as refresh_badnews_playback_urls,
         upsert_video_item as upsert_badnews_video_item,
     )
+    from collector.bdrq_source import (
+        BDRQ_CRITICAL_WINDOW_MINUTES,
+        BDRQ_DEFAULT_BASE_URL,
+        BDRQ_KIND,
+        BDRQ_REFRESH_WINDOW_MINUTES,
+        BDRQ_RETENTION_HOURS,
+        BDRQ_SITE_NAME,
+        BDRQ_SOURCE,
+        is_bdrq_target_url,
+        monitor_site as monitor_bdrq_site,
+        normalize_bdrq_target_value,
+        refresh_playback_urls as refresh_bdrq_playback_urls,
+        upsert_video_item as upsert_bdrq_video_item,
+    )
     from collector.dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
         DADAAFA_DEFAULT_BASE_URL,
@@ -163,6 +177,20 @@ except ModuleNotFoundError:
         normalize_badnews_target_value,
         refresh_playback_urls as refresh_badnews_playback_urls,
         upsert_video_item as upsert_badnews_video_item,
+    )
+    from bdrq_source import (
+        BDRQ_CRITICAL_WINDOW_MINUTES,
+        BDRQ_DEFAULT_BASE_URL,
+        BDRQ_KIND,
+        BDRQ_REFRESH_WINDOW_MINUTES,
+        BDRQ_RETENTION_HOURS,
+        BDRQ_SITE_NAME,
+        BDRQ_SOURCE,
+        is_bdrq_target_url,
+        monitor_site as monitor_bdrq_site,
+        normalize_bdrq_target_value,
+        refresh_playback_urls as refresh_bdrq_playback_urls,
+        upsert_video_item as upsert_bdrq_video_item,
     )
     from dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
@@ -330,6 +358,7 @@ DETAIL_LINK_PROFILE_SOURCES = {
     PORNA91_SOURCE,
     PORN91_SOURCE,
     J18_SOURCE,
+    BDRQ_SOURCE,
 }
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -438,6 +467,22 @@ def parse_targets(raw: str | list[str] | None) -> list[str]:
 
 def parse_target_value(target: str) -> dict[str, str]:
     normalized = normalize_target(target)
+    if normalized.lower().startswith("bdrq:"):
+        value = normalize_bdrq_target_value(normalized[len("bdrq:") :].strip())
+        return {"source": BDRQ_SOURCE, "kind": BDRQ_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("bdrq45:"):
+        value = normalize_bdrq_target_value(normalized[len("bdrq45:") :].strip())
+        return {"source": BDRQ_SOURCE, "kind": BDRQ_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("bdrq12:"):
+        value = normalize_bdrq_target_value(normalized[len("bdrq12:") :].strip())
+        return {"source": BDRQ_SOURCE, "kind": BDRQ_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if is_bdrq_target_url(normalized):
+        value = normalize_bdrq_target_value(normalized)
+        return {"source": BDRQ_SOURCE, "kind": BDRQ_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
     if normalized.lower().startswith("1mtif:"):
         value = normalize_mtif_target_value(normalized[len("1mtif:") :].strip())
         return {"source": MTIF_SOURCE, "kind": MTIF_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
@@ -623,6 +668,8 @@ def format_target(kind: str, value: str) -> str:
 
 
 def format_target_row(target_row: dict) -> str:
+    if target_row.get("source") == BDRQ_SOURCE:
+        return f"bdrq:{target_row['value']}"
     if target_row.get("source") == MTIF_SOURCE:
         return f"1mtif:{target_row['value']}"
     if target_row.get("source") == BADNEWS_SOURCE:
@@ -683,6 +730,8 @@ def normalized_presentation_source(source: str | None) -> str:
         return TIKPORN_SOURCE
     if source_key in {"badnews", "bad.news"}:
         return BADNEWS_SOURCE
+    if source_key in {"bdrq", "bdrq45", "bdrq45.cc", "bdrq12", "bdrq12.cc"}:
+        return BDRQ_SOURCE
     if source_key in {"91porn", "91porn.com"}:
         return PORN91_SOURCE
     if source_key in {"91porna", "porna91", "91porna.com"}:
@@ -706,6 +755,7 @@ def source_display_name(source: str | None) -> str:
         MTIF_SOURCE: MTIF_SITE_NAME,
         TIKPORN_SOURCE: TIKPORN_SITE_NAME,
         BADNEWS_SOURCE: BADNEWS_SITE_NAME,
+        BDRQ_SOURCE: BDRQ_SITE_NAME,
         PORN91_SOURCE: PORN91_SITE_NAME,
         PORNA91_SOURCE: PORNA91_SITE_NAME,
     }.get(source_key, source_key or "X")
@@ -4944,6 +4994,38 @@ def command_refresh_badnews_playback_urls(args) -> int:
     return 0
 
 
+def command_monitor_bdrq(args) -> int:
+    base_url = args.base_url or BDRQ_DEFAULT_BASE_URL
+    retention_hours = args.retention_hours if args.retention_hours is not None else BDRQ_RETENTION_HOURS
+    if args.retention_days is not None:
+        retention_hours = args.retention_days * 24
+    max_records = args.max_records if args.max_records is not None else DEFAULT_MAX_RECORDS
+    if args.dry_run and not DATABASE_URL:
+        stats = monitor_bdrq_site(None, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=True)
+        print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+        return 0
+    with get_db_connection() as conn:
+        stats = monitor_bdrq_site(conn, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=args.dry_run)
+        if args.dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        if not args.skip_cleanup and not args.dry_run:
+            cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
+            conn.commit()
+            stats = {**stats, "cleanup": cleanup_stats}
+    print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+def command_refresh_bdrq_playback_urls(args) -> int:
+    with get_db_connection() as conn:
+        stats = refresh_bdrq_playback_urls(conn, limit=max(1, args.limit), refresh_window_minutes=max(1, args.refresh_window_minutes), critical_window_minutes=max(1, args.critical_window_minutes))
+        conn.commit()
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_monitor_tikporn(args) -> int:
     base_url = args.base_url or TIKPORN_DEFAULT_BASE_URL
     retention_hours = args.retention_hours if args.retention_hours is not None else TIKPORN_RETENTION_HOURS
@@ -5145,6 +5227,17 @@ def build_parser() -> argparse.ArgumentParser:
     badnews_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
     badnews_monitor_parser.set_defaults(func=command_monitor_badnews)
 
+    bdrq_monitor_parser = subparsers.add_parser("monitor-bdrq", help="单独抓取 背德人妻 视频并入库")
+    bdrq_monitor_parser.add_argument("--base-url", default=BDRQ_DEFAULT_BASE_URL, help="背德人妻站点入口；默认同时抓取两个内置列表")
+    bdrq_monitor_parser.add_argument("--max-pages", type=int, default=1, help="单次每个列表最多分页数；默认 1 页，两条列表合并抓取")
+    bdrq_monitor_parser.add_argument("--retention-hours", type=int, default=None, help="视频业务保留小时数，默认 84")
+    bdrq_monitor_parser.add_argument("--retention-days", type=int, default=None, help="兼容旧参数：视频业务保留天数")
+    bdrq_monitor_parser.add_argument("--max-records", type=int, default=None, help="最大保留记录数")
+    bdrq_monitor_parser.add_argument("--skip-cleanup", action="store_true", help="本轮监控后不执行清理")
+    bdrq_monitor_parser.add_argument("--private-pool", action="store_true", help="不加入公共视频池")
+    bdrq_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
+    bdrq_monitor_parser.set_defaults(func=command_monitor_bdrq)
+
     tikporn_monitor_parser = subparsers.add_parser("monitor-tikporn", help="单独抓取 Tik.Porn 视频并入库")
     tikporn_monitor_parser.add_argument("--base-url", default=TIKPORN_DEFAULT_BASE_URL, help="Tik.Porn 站点入口")
     tikporn_monitor_parser.add_argument("--max-pages", type=int, default=1, help="兼容参数；Tik.Porn 最新接口当前固定返回最新一页")
@@ -5254,6 +5347,12 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_badnews_parser.add_argument("--refresh-window-minutes", type=int, default=BADNEWS_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
     refresh_badnews_parser.add_argument("--critical-window-minutes", type=int, default=BADNEWS_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
     refresh_badnews_parser.set_defaults(func=command_refresh_badnews_playback_urls)
+
+    refresh_bdrq_parser = subparsers.add_parser("refresh-bdrq-playback-urls", help="刷新 背德人妻 播放 URL（仅处理带过期时间的历史记录）")
+    refresh_bdrq_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")
+    refresh_bdrq_parser.add_argument("--refresh-window-minutes", type=int, default=BDRQ_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
+    refresh_bdrq_parser.add_argument("--critical-window-minutes", type=int, default=BDRQ_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
+    refresh_bdrq_parser.set_defaults(func=command_refresh_bdrq_playback_urls)
 
     refresh_tikporn_parser = subparsers.add_parser("refresh-tikporn-playback-urls", help="刷新 Tik.Porn 播放 URL（仅处理带过期时间的历史记录）")
     refresh_tikporn_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")

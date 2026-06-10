@@ -74,10 +74,10 @@ test("parseTarget understands 91cg site targets", () => {
 });
 
 test("parseTarget understands 51baoliao site targets", () => {
-  assert.deepEqual(parseTarget("baoliao51:https://www.51baoliao01.com/"), {
+  assert.deepEqual(parseTarget("baoliao51:https://www.51baoliao01.com/category/jrbl/"), {
     source: "baoliao51",
     kind: "site",
-    value: "https://www.51baoliao01.com",
+    value: "https://www.51baoliao01.com/category/jrbl/",
     normalizedValue: "www.51baoliao01.com",
     tags: [],
   });
@@ -443,7 +443,7 @@ test("parseTargets normalizes explicit source aliases", () => {
     {
       source: "baoliao51",
       kind: "site",
-      value: "https://www.51baoliao01.com",
+      value: "https://www.51baoliao01.com/category/jrbl/",
       normalizedValue: "www.51baoliao01.com",
       category: "adult",
       tags: [],
@@ -722,7 +722,7 @@ test("parseTargets accepts explicit 51baoliao object targets", () => {
     {
       source: "baoliao51",
       kind: "site",
-      value: "https://www.51baoliao01.com",
+      value: "https://www.51baoliao01.com/category/jrbl/",
       normalizedValue: "www.51baoliao01.com",
       category: "adult",
       tags: ["51爆料", "视频"],

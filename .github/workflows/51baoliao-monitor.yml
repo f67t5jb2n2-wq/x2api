@@ -15,16 +15,16 @@ on:
       base_url:
         description: '51爆料网站点入口'
         required: false
-        default: 'https://www.51baoliao01.com'
+        default: 'https://www.51baoliao01.com/category/jrbl/'
       max_pages:
         description: '单次最多分页数'
         required: false
-        default: '4'
+        default: '1'
 
 jobs:
   monitor-51baoliao:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
 
     steps:
       - name: Checkout code
@@ -47,8 +47,8 @@ jobs:
         working-directory: collector
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          BASE_URL: ${{ inputs.base_url || vars.BAOLIAO51_BASE_URL || 'https://www.51baoliao01.com' }}
-          MAX_PAGES: ${{ inputs.max_pages || vars.BAOLIAO51_MONITOR_MAX_PAGES || '4' }}
+          BASE_URL: ${{ inputs.base_url || vars.BAOLIAO51_BASE_URL || 'https://www.51baoliao01.com/category/jrbl/' }}
+          MAX_PAGES: ${{ inputs.max_pages || vars.BAOLIAO51_MONITOR_MAX_PAGES || '1' }}
         run: |
           python twitter_monitor.py monitor-51baoliao \
             --base-url "${BASE_URL}" \

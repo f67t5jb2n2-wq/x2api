@@ -54,6 +54,20 @@ try:
         refresh_playback_urls as refresh_badnews_playback_urls,
         upsert_video_item as upsert_badnews_video_item,
     )
+    from collector.baoliao51_refresh import refresh_playback_urls as refresh_baoliao51_playback_urls
+    from collector.baoliao51_source import (
+        BAOLIAO51_CRITICAL_WINDOW_MINUTES,
+        BAOLIAO51_DEFAULT_BASE_URL,
+        BAOLIAO51_KIND,
+        BAOLIAO51_REFRESH_WINDOW_MINUTES,
+        BAOLIAO51_RETENTION_HOURS,
+        BAOLIAO51_SITE_NAME,
+        BAOLIAO51_SOURCE,
+        is_baoliao51_target_url,
+        monitor_site as monitor_baoliao51_site,
+        normalize_baoliao51_target_value,
+        upsert_baoliao51_video_item,
+    )
     from collector.bdrq_source import (
         BDRQ_CRITICAL_WINDOW_MINUTES,
         BDRQ_DEFAULT_BASE_URL,
@@ -312,6 +326,20 @@ except ModuleNotFoundError:
         normalize_badnews_target_value,
         refresh_playback_urls as refresh_badnews_playback_urls,
         upsert_video_item as upsert_badnews_video_item,
+    )
+    from baoliao51_refresh import refresh_playback_urls as refresh_baoliao51_playback_urls
+    from baoliao51_source import (
+        BAOLIAO51_CRITICAL_WINDOW_MINUTES,
+        BAOLIAO51_DEFAULT_BASE_URL,
+        BAOLIAO51_KIND,
+        BAOLIAO51_REFRESH_WINDOW_MINUTES,
+        BAOLIAO51_RETENTION_HOURS,
+        BAOLIAO51_SITE_NAME,
+        BAOLIAO51_SOURCE,
+        is_baoliao51_target_url,
+        monitor_site as monitor_baoliao51_site,
+        normalize_baoliao51_target_value,
+        upsert_baoliao51_video_item,
     )
     from bdrq_source import (
         BDRQ_CRITICAL_WINDOW_MINUTES,
@@ -572,11 +600,6 @@ CG91_SOURCE = "cg91"
 CG91_KIND = "site"
 CG91_DEFAULT_BASE_URL = os.environ.get("CG91_BASE_URL", "https://www.91cg1.com").strip().rstrip("/")
 CG91_RETENTION_HOURS = int(os.environ.get("CG91_RETENTION_HOURS", "84"))
-BAOLIAO51_SITE_NAME = "51爆料网"
-BAOLIAO51_SOURCE = "baoliao51"
-BAOLIAO51_KIND = "site"
-BAOLIAO51_DEFAULT_BASE_URL = os.environ.get("BAOLIAO51_BASE_URL", "https://www.51baoliao01.com").strip().rstrip("/")
-BAOLIAO51_RETENTION_HOURS = int(os.environ.get("BAOLIAO51_RETENTION_HOURS", "84"))
 DOUYIN_SITE_NAME = "抖阴"
 DOUYIN_SOURCE = "douyin"
 DOUYIN_KIND = "site"
@@ -1356,28 +1379,6 @@ def is_cg91_target_url(raw: str) -> bool:
         return False
     host = parsed.netloc.lower()
     return host in {"91cg1.com", "www.91cg1.com"}
-
-
-def normalize_baoliao51_target_value(raw: str) -> str:
-    value = (raw or BAOLIAO51_DEFAULT_BASE_URL).strip().rstrip("/")
-    if not value:
-        value = BAOLIAO51_DEFAULT_BASE_URL
-    parsed = urlparse(value if "://" in value else f"https://{value}")
-    if not parsed.netloc:
-        raise ValueError("51baoliao target must be a URL or host.")
-    return urlunparse((parsed.scheme or "https", parsed.netloc.lower(), "", "", "", ""))
-
-
-def is_baoliao51_target_url(raw: str) -> bool:
-    value = raw.strip().lower()
-    if not value:
-        return False
-    try:
-        parsed = urlparse(value if "://" in value else f"https://{value}")
-    except Exception:
-        return False
-    host = parsed.netloc.lower()
-    return host in {"51baoliao01.com", "www.51baoliao01.com"}
 
 
 def normalize_douyin_target_value(raw: str) -> str:
@@ -3890,264 +3891,6 @@ def refresh_cg91_playback_urls(conn, limit: int, refresh_window_minutes: int, cr
     return {"processed": processed, "refreshed": refreshed, "failed": failed}
 
 
-def extract_baoliao51_json_ld(soup: BeautifulSoup) -> dict:
-    for script in soup.select('script[type="application/ld+json"]'):
-        try:
-            payload = json.loads(script.get_text("", strip=True))
-        except json.JSONDecodeError:
-            continue
-        candidates = []
-        if isinstance(payload, dict):
-            graph = payload.get("@graph")
-            candidates = graph if isinstance(graph, list) else [payload]
-        elif isinstance(payload, list):
-            candidates = payload
-        for candidate in candidates:
-            if isinstance(candidate, dict) and candidate.get("@type") in {"BlogPosting", "Article"}:
-                return candidate
-    return {}
-
-
-def extract_baoliao51_page_id(url: str) -> str:
-    match = re.search(r"/archives/(\d+)/?", urlparse(url).path)
-    if not match:
-        return hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
-    return match.group(1)
-
-
-def parse_baoliao51_list_page(base_url: str, page_url: str) -> tuple[list[dict], str | None]:
-    soup = BeautifulSoup(fetch_heiliao_html(page_url), "html.parser")
-    items: list[dict] = []
-    seen: set[str] = set()
-    for article in soup.select("article"):
-        link = article.select_one('a[href*="/archives/"]')
-        heading = article.select_one("h2,h1,h3")
-        if not link or not link.get("href") or not heading:
-            continue
-        detail_url = urlunparse(urlparse(urljoin(page_url, link["href"]))._replace(fragment=""))
-        if not re.search(r"/archives/\d+/?$", urlparse(detail_url).path) or detail_url in seen:
-            continue
-        seen.add(detail_url)
-        text = article.get_text(" ", strip=True)
-        items.append({"url": detail_url, "page_id": extract_baoliao51_page_id(detail_url), "title": heading.get_text(" ", strip=True), "published_at": parse_chinese_date(text), "raw_meta": text[:500]})
-    next_url = None
-    for selector in ('link[rel="next"]', 'a[rel="next"]', 'a.next', '.page-navigator a.next'):
-        next_link = soup.select_one(selector)
-        href = next_link.get("href") if next_link else None
-        if href:
-            next_url = urljoin(page_url, href)
-            break
-    if not next_url:
-        for link in soup.find_all("a", href=True):
-            label = link.get_text(" ", strip=True).lower()
-            if label in {"下一页", "next", "›", "»"} or "下一页" in label:
-                next_url = urljoin(page_url, link["href"])
-                break
-    if next_url:
-        parsed_base = urlparse(base_url)
-        parsed_next = urlparse(next_url)
-        if parsed_next.netloc and parsed_next.netloc.lower() != parsed_base.netloc.lower():
-            next_url = None
-    return items, next_url
-
-
-def parse_baoliao51_detail_page(detail_url: str, list_item: dict | None = None) -> dict:
-    soup = BeautifulSoup(fetch_heiliao_html(detail_url), "html.parser")
-    entity = extract_baoliao51_json_ld(soup)
-    title_el = soup.select_one("h1.post-title") or soup.find("h1")
-    title = (title_el.get_text(" ", strip=True) if title_el else None) or (list_item or {}).get("title") or "51爆料视频"
-    published_at = parse_datetime(entity.get("datePublished")) or (list_item or {}).get("published_at") or now_utc()
-    modified_at = parse_datetime(entity.get("dateModified"))
-    description = extract_meta_description(soup, entity) or extract_site_post_body(soup)
-    image_value = entity.get("image")
-    image = image_value.get("url") if isinstance(image_value, dict) and isinstance(image_value.get("url"), str) else image_value
-    image = image if isinstance(image, str) else None
-    page_id = extract_baoliao51_page_id(detail_url)
-    content_scope = soup.select_one("article.post") or soup
-    players = []
-    for index, player in enumerate(content_scope.select("div.dplayer[data-config]"), start=1):
-        try:
-            config = json.loads(player["data-config"])
-        except (KeyError, json.JSONDecodeError):
-            continue
-        video_config = config.get("video") if isinstance(config, dict) else None
-        video_url = video_config.get("url") if isinstance(video_config, dict) else None
-        video_type = video_config.get("type") if isinstance(video_config, dict) else None
-        if not isinstance(video_url, str) or not video_url.strip() or not isinstance(video_type, str) or video_type.lower() != "hls":
-            continue
-        video_id = (player.get("data-video_id") or f"{page_id}{index:03d}").strip()
-        video_title = (player.get("data-video_title") or f"{title}{index:03d}").strip()
-        tags = [tag.strip() for tag in (player.get("data-video_tag_name") or "").split(",") if tag.strip()]
-        players.append({"guid": f"baoliao51:{page_id}:{video_id}", "page_id": page_id, "player_index": index, "video_id": video_id, "video_title": video_title, "video_url": video_url.strip(), "video_type": video_type.lower(), "tags": tags})
-    return {"url": detail_url, "page_id": page_id, "title": title, "description": description, "image": image, "published_at": published_at, "modified_at": modified_at, "players": players}
-
-
-def ensure_baoliao51_target(conn, base_url: str, *, public_pool: bool = True) -> dict:
-    target_row = upsert_target(conn, f"baoliao51:{base_url}")
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO target_profiles (target_id, scope, tags, category, weight, is_public_pool)
-            VALUES (%s, 'system', %s, 'adult', 45, %s)
-            ON CONFLICT (target_id) DO UPDATE SET scope = EXCLUDED.scope, tags = EXCLUDED.tags, category = EXCLUDED.category, weight = EXCLUDED.weight, is_public_pool = EXCLUDED.is_public_pool, updated_at = NOW()
-            """,
-            (target_row["id"], Jsonb([BAOLIAO51_SITE_NAME, "爆料", "视频"]), public_pool),
-        )
-    return target_row
-
-
-def upsert_baoliao51_video_item(conn, target_row: dict, detail: dict, player: dict, verified: dict, retention_hours: int) -> bool:
-    published_at = detail.get("published_at") or now_utc()
-    expires_at = published_at + timedelta(hours=retention_hours)
-    content = detail.get("description") or detail.get("title") or player.get("video_title")
-    images = [detail["image"]] if detail.get("image") else []
-    presentation = build_item_author_presentation(
-        target_row,
-        author=BAOLIAO51_SITE_NAME,
-        fullname=BAOLIAO51_SITE_NAME,
-        x_url=None,
-        link=detail["url"],
-    )
-    metadata = {"target": format_target_row(target_row), "target_type": BAOLIAO51_KIND, "target_value": target_row["value"], "site_name": BAOLIAO51_SITE_NAME, "source_url": detail["url"], "page_id": detail["page_id"], "player_index": player["player_index"], "page_video_count": len(detail.get("players") or []), "baoliao51_video_id": player["video_id"], "video_type": player["video_type"], "tags": player.get("tags") or [], "date_modified": detail.get("modified_at").isoformat() if detail.get("modified_at") else None, "resolver": "baoliao51-dplayer", "resolved_at": now_iso(), "video_url_expires_at": verified["video_url_expires_at"].isoformat()}
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO items (
-                target_id, guid, author, fullname,
-                display_author, display_handle, author_profile_url, author_profile_platform,
-                title, content, raw_content, translated_content,
-                link, x_url, images, video_url, expires_at, video_url_expires_at,
-                published_at, stored_at, is_retweet, metadata
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, NULL, %s, %s, %s, %s, %s, NOW(), FALSE, %s)
-            ON CONFLICT (target_id, guid) DO UPDATE SET
-                display_author = EXCLUDED.display_author,
-                display_handle = EXCLUDED.display_handle,
-                author_profile_url = EXCLUDED.author_profile_url,
-                author_profile_platform = EXCLUDED.author_profile_platform,
-                title = EXCLUDED.title,
-                content = EXCLUDED.content,
-                raw_content = EXCLUDED.raw_content,
-                images = EXCLUDED.images,
-                video_url = EXCLUDED.video_url,
-                expires_at = EXCLUDED.expires_at,
-                video_url_expires_at = EXCLUDED.video_url_expires_at,
-                published_at = COALESCE(items.published_at, EXCLUDED.published_at),
-                metadata = items.metadata || EXCLUDED.metadata
-            RETURNING (xmax = 0) AS inserted
-            """,
-            (
-                target_row["id"],
-                player["guid"],
-                BAOLIAO51_SITE_NAME,
-                BAOLIAO51_SITE_NAME,
-                presentation["display_author"],
-                presentation["display_handle"],
-                presentation["author_profile_url"],
-                presentation["author_profile_platform"],
-                player.get("video_title") or detail.get("title"),
-                content,
-                detail.get("title"),
-                detail["url"],
-                Jsonb(images),
-                verified["video_url"],
-                expires_at,
-                verified["video_url_expires_at"],
-                published_at,
-                Jsonb(metadata),
-            ),
-        )
-        row = cur.fetchone()
-    return bool(row and row.get("inserted"))
-
-
-def monitor_baoliao51_site(conn, *, base_url: str, max_pages: int, retention_hours: int, public_pool: bool, dry_run: bool = False) -> dict:
-    base_url = normalize_baoliao51_target_value(base_url)
-    target_row = None if dry_run else ensure_baoliao51_target(conn, base_url, public_pool=public_pool)
-    page_url = base_url + "/"
-    cutoff = now_utc() - timedelta(hours=retention_hours)
-    inserted = updated = parsed_videos = verified_count = skipped_existing = skipped_detail_errors = skipped_unverified = pages = 0
-    samples = []
-    latest_guid = None
-    for _ in range(max_pages):
-        pages += 1
-        list_items, next_url = parse_baoliao51_list_page(base_url, page_url)
-        page_inserted = page_existing = page_old = page_updated = page_verified = page_detail_errors = page_unverified = page_parsed_videos = 0
-        print(f"[51baoliao] page={pages} list_items={len(list_items)} url={page_url}")
-        if not list_items:
-            print(f"[51baoliao] page={pages} empty_list stop=true")
-            break
-        for list_item in list_items:
-            if list_item.get("published_at") and list_item["published_at"] < cutoff:
-                page_old += 1
-                continue
-            try:
-                detail = parse_baoliao51_detail_page(list_item["url"], list_item)
-            except Exception as exc:
-                skipped_detail_errors += 1
-                page_detail_errors += 1
-                print(f"[51baoliao] skip detail {list_item.get('url')}: {exc}")
-                continue
-            page_parsed_videos += len(detail["players"])
-            parsed_videos += len(detail["players"])
-            for player in detail["players"]:
-                latest_guid = latest_guid or player["guid"]
-                if target_row and item_exists_for_guid(conn, str(target_row["id"]), player["guid"]):
-                    page_existing += 1; skipped_existing += 1; continue
-                try:
-                    verified = verify_heiliao_hls_url(player["video_url"], detail["url"])
-                except Exception as exc:
-                    skipped_unverified += 1; page_unverified += 1; print(f"[51baoliao] skip unverified {player['guid']}: {exc}"); continue
-                verified_count += 1
-                page_verified += 1
-                if dry_run:
-                    samples.append({"guid": player["guid"], "title": player.get("video_title"), "link": detail["url"], "published_at": detail["published_at"].isoformat() if detail.get("published_at") else None, "video_url": verified["video_url"], "video_url_expires_at": verified["video_url_expires_at"].isoformat()}); continue
-                if upsert_baoliao51_video_item(conn, target_row, detail, player, verified, retention_hours):
-                    inserted += 1; page_inserted += 1
-                else:
-                    updated += 1; page_updated += 1
-        if target_row:
-            upsert_crawl_state(conn, target_row["id"], last_guid=latest_guid, last_error=None, success=True)
-        print(
-            f"[51baoliao] page={pages} parsed_videos={page_parsed_videos} verified={page_verified} "
-            f"inserted={page_inserted} updated={page_updated} existing={page_existing} old={page_old} "
-            f"detail_errors={page_detail_errors} unverified={page_unverified}"
-        )
-        if not next_url:
-            break
-        page_url = next_url
-    return {"pages": pages, "parsed_videos": parsed_videos, "verified": verified_count, "inserted": inserted, "updated": updated, "skipped_existing": skipped_existing, "skipped_detail_errors": skipped_detail_errors, "skipped_unverified": skipped_unverified, "samples": samples[:10]}
-
-
-def refresh_baoliao51_playback_urls(conn, limit: int, refresh_window_minutes: int, critical_window_minutes: int) -> dict[str, int]:
-    processed = refreshed = failed = 0
-    queries = [("""SELECT i.* FROM items i INNER JOIN targets t ON t.id = i.target_id WHERE t.source = %s AND i.expires_at > NOW() AND i.video_url_expires_at <= NOW() + (%s || ' minutes')::interval ORDER BY i.video_url_expires_at ASC LIMIT %s""", (BAOLIAO51_SOURCE, critical_window_minutes, limit)), ("""SELECT i.* FROM items i INNER JOIN targets t ON t.id = i.target_id WHERE t.source = %s AND i.expires_at > NOW() AND i.video_url_expires_at <= NOW() + (%s || ' minutes')::interval ORDER BY i.video_url_expires_at ASC, i.published_at DESC LIMIT %s""", (BAOLIAO51_SOURCE, refresh_window_minutes, limit))]
-    seen_ids: set[str] = set()
-    for sql, params in queries:
-        if processed >= limit: break
-        with conn.cursor() as cur:
-            cur.execute(sql, params); rows = cur.fetchall()
-        for row in rows:
-            row_id = str(row["id"])
-            if row_id in seen_ids or processed >= limit: continue
-            seen_ids.add(row_id); processed += 1
-            metadata = row["metadata"] or {}; source_url = metadata.get("source_url") or row.get("link"); video_id = metadata.get("baoliao51_video_id")
-            try:
-                if not source_url or not video_id: raise ValueError("missing source_url or baoliao51_video_id")
-                detail = parse_baoliao51_detail_page(source_url)
-                player = next((candidate for candidate in detail["players"] if candidate["video_id"] == video_id), None)
-                if not player: raise ValueError("matching player not found")
-                verified = verify_heiliao_hls_url(player["video_url"], detail["url"])
-                next_metadata = metadata | {"resolver": "baoliao51-dplayer", "resolved_at": now_iso(), "video_url_expires_at": verified["video_url_expires_at"].isoformat(), "date_modified": detail.get("modified_at").isoformat() if detail.get("modified_at") else metadata.get("date_modified")}
-                with conn.cursor() as cur:
-                    cur.execute("""UPDATE items SET video_url = %s, video_url_expires_at = %s, metadata = %s, stored_at = stored_at WHERE id = %s""", (verified["video_url"], verified["video_url_expires_at"], Jsonb(next_metadata), row["id"]))
-                refreshed += 1
-            except Exception as exc:
-                failed += 1; print(f"[51baoliao] refresh failed for {row['guid']}: {exc}")
-            conn.commit()
-    return {"processed": processed, "refreshed": refreshed, "failed": failed}
-
-
 def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, int]:
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) AS count FROM items")
@@ -5839,7 +5582,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     baoliao51_monitor_parser = subparsers.add_parser("monitor-51baoliao", help="单独抓取 51爆料网视频并入库")
     baoliao51_monitor_parser.add_argument("--base-url", default=BAOLIAO51_DEFAULT_BASE_URL, help="51爆料网站点入口")
-    baoliao51_monitor_parser.add_argument("--max-pages", type=int, default=4, help="单次最多分页数")
+    baoliao51_monitor_parser.add_argument("--max-pages", type=int, default=1, help="单次最多分页数")
     baoliao51_monitor_parser.add_argument("--retention-hours", type=int, default=None, help="视频业务保留小时数，默认 84")
     baoliao51_monitor_parser.add_argument("--retention-days", type=int, default=None, help="兼容旧参数：视频业务保留天数")
     baoliao51_monitor_parser.add_argument("--max-records", type=int, default=None, help="最大保留记录数")
@@ -6109,8 +5852,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     refresh_baoliao51_parser = subparsers.add_parser("refresh-51baoliao-playback-urls", help="刷新 51爆料网播放 URL")
     refresh_baoliao51_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")
-    refresh_baoliao51_parser.add_argument("--refresh-window-minutes", type=int, default=HEILIAO_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
-    refresh_baoliao51_parser.add_argument("--critical-window-minutes", type=int, default=HEILIAO_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
+    refresh_baoliao51_parser.add_argument("--refresh-window-minutes", type=int, default=BAOLIAO51_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
+    refresh_baoliao51_parser.add_argument("--critical-window-minutes", type=int, default=BAOLIAO51_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
     refresh_baoliao51_parser.set_defaults(func=command_refresh_baoliao51_playback_urls)
 
     refresh_douyin_parser = subparsers.add_parser("refresh-douyin-playback-urls", help="刷新抖阴播放 URL")

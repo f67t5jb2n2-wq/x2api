@@ -17,7 +17,7 @@ const YOUTUBE_CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{20,}$/;
 const YOUTUBE_FEED_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com"]);
 const HEILIAO_DEFAULT_URL = "https://among.uvsoskqus.cc";
 const CG91_DEFAULT_URL = "https://www.91cg1.com";
-const BAOLIAO51_DEFAULT_URL = "https://www.51baoliao01.com";
+const BAOLIAO51_DEFAULT_URL = "https://www.51baoliao01.com/category/jrbl/";
 const DOUYIN_DEFAULT_URL = "https://xygrfrfb3g.b2h7y8w.com";
 const MH18_DEFAULT_URL = "https://18mh.net";
 const ROU_DEFAULT_URL = "https://rou.video";
@@ -83,9 +83,14 @@ function isCg91TargetURL(raw: string) {
 }
 
 function normalizeBaoliao51TargetValue(raw: string) {
-  const value = (raw.trim() || BAOLIAO51_DEFAULT_URL).replace(/\/+$/, "");
+  const value = raw.trim() || BAOLIAO51_DEFAULT_URL;
   const url = new URL(value.includes("://") ? value : `https://${value}`);
-  return `${url.protocol}//${url.host.toLowerCase()}`;
+  let path = url.pathname || "/category/jrbl/";
+  if (path === "/") {
+    path = "/category/jrbl/";
+  }
+  path = `/${path.replace(/^\/+|\/+$/g, "")}/`;
+  return `${url.protocol}//${url.host.toLowerCase()}${path}`;
 }
 
 function isBaoliao51TargetURL(raw: string) {

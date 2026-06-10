@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS targets (
     normalized_value TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT targets_source_check CHECK (source IN ('twitter', 'youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', '18j', '1mtif', 'tikporn', '91porna', '91porn', 'badnews', 'bdrq', 'avgood', '705hs', 'xxxtik', 'affair', 'dirtyship', 'influencersgonewild')),
+    CONSTRAINT targets_source_check CHECK (source IN ('twitter', 'youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', '18j', '1mtif', 'tikporn', '91porna', '91porn', 'badnews', 'bdrq', 'avgood', '705hs', 'xxxtik', 'affair', 'dirtyship', 'influencersgonewild', 'missav')),
     CONSTRAINT targets_kind_check CHECK (kind IN ('user', 'keyword', 'channel', 'site')),
     CONSTRAINT targets_youtube_kind_check CHECK (source <> 'youtube' OR kind = 'channel'),
     CONSTRAINT targets_heiliao_kind_check CHECK (source <> 'heiliao' OR kind = 'site'),
@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS targets (
     CONSTRAINT targets_affair_kind_check CHECK (source <> 'affair' OR kind = 'site'),
     CONSTRAINT targets_dirtyship_kind_check CHECK (source <> 'dirtyship' OR kind = 'site'),
     CONSTRAINT targets_influencersgonewild_kind_check CHECK (source <> 'influencersgonewild' OR kind = 'site'),
+    CONSTRAINT targets_missav_kind_check CHECK (source <> 'missav' OR kind = 'site'),
     CONSTRAINT targets_unique_normalized UNIQUE (source, kind, normalized_value)
 );
 
@@ -71,7 +72,8 @@ ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_xxxtik_kind_check;
 ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_affair_kind_check;
 ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_dirtyship_kind_check;
 ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_influencersgonewild_kind_check;
-ALTER TABLE targets ADD CONSTRAINT targets_source_check CHECK (source IN ('twitter', 'youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', '18j', '1mtif', 'tikporn', '91porna', '91porn', 'badnews', 'bdrq', 'avgood', '705hs', 'xxxtik', 'affair', 'dirtyship', 'influencersgonewild'));
+ALTER TABLE targets DROP CONSTRAINT IF EXISTS targets_missav_kind_check;
+ALTER TABLE targets ADD CONSTRAINT targets_source_check CHECK (source IN ('twitter', 'youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', '18j', '1mtif', 'tikporn', '91porna', '91porn', 'badnews', 'bdrq', 'avgood', '705hs', 'xxxtik', 'affair', 'dirtyship', 'influencersgonewild', 'missav'));
 ALTER TABLE targets ADD CONSTRAINT targets_kind_check CHECK (kind IN ('user', 'keyword', 'channel', 'site'));
 ALTER TABLE targets ADD CONSTRAINT targets_youtube_kind_check CHECK (source <> 'youtube' OR kind = 'channel');
 ALTER TABLE targets ADD CONSTRAINT targets_heiliao_kind_check CHECK (source <> 'heiliao' OR kind = 'site');
@@ -94,6 +96,7 @@ ALTER TABLE targets ADD CONSTRAINT targets_xxxtik_kind_check CHECK (source <> 'x
 ALTER TABLE targets ADD CONSTRAINT targets_affair_kind_check CHECK (source <> 'affair' OR kind = 'site');
 ALTER TABLE targets ADD CONSTRAINT targets_dirtyship_kind_check CHECK (source <> 'dirtyship' OR kind = 'site');
 ALTER TABLE targets ADD CONSTRAINT targets_influencersgonewild_kind_check CHECK (source <> 'influencersgonewild' OR kind = 'site');
+ALTER TABLE targets ADD CONSTRAINT targets_missav_kind_check CHECK (source <> 'missav' OR kind = 'site');
 ALTER TABLE targets ADD CONSTRAINT targets_unique_normalized UNIQUE (source, kind, normalized_value);
 
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -317,6 +320,8 @@ BEGIN
         WHEN 'influencersgonewild' THEN RETURN 'influencersgonewild';
         WHEN 'influencersgonewild.com' THEN RETURN 'influencersgonewild';
         WHEN 'igw' THEN RETURN 'influencersgonewild';
+        WHEN 'missav' THEN RETURN 'missav';
+        WHEN 'missav.app' THEN RETURN 'missav';
         ELSE RETURN source_key;
     END CASE;
 END;
@@ -351,6 +356,7 @@ BEGIN
         WHEN 'affair' THEN RETURN '911爆料';
         WHEN 'dirtyship' THEN RETURN 'DirtyShip';
         WHEN 'influencersgonewild' THEN RETURN 'InfluencersGoneWild';
+        WHEN 'missav' THEN RETURN 'MISSAV';
         ELSE RETURN COALESCE(NULLIF(source_key, ''), 'X');
     END CASE;
 END;
@@ -411,7 +417,7 @@ BEGIN
         NEW.display_handle := NULL;
         NEW.author_profile_url := profile_url;
         NEW.author_profile_platform := CASE WHEN profile_url IS NOT NULL THEN x2_source_display_name(target_source) ELSE NULL END;
-    ELSIF target_source IN ('heiliao', 'cg91', 'baoliao51', '18mh', 'rou', 'dadaafa', '18j', '1mtif', 'tikporn', '91porna', '91porn', 'badnews', 'bdrq', 'avgood', '705hs', 'xxxtik', 'affair', 'dirtyship', 'influencersgonewild') THEN
+    ELSIF target_source IN ('heiliao', 'cg91', 'baoliao51', '18mh', 'rou', 'dadaafa', '18j', '1mtif', 'tikporn', '91porna', '91porn', 'badnews', 'bdrq', 'avgood', '705hs', 'xxxtik', 'affair', 'dirtyship', 'influencersgonewild', 'missav') THEN
         profile_url := x2_http_url(NEW.link);
         NEW.display_handle := NULL;
         NEW.author_profile_url := profile_url;

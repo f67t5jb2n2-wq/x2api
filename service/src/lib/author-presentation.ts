@@ -37,6 +37,7 @@ const DETAIL_LINK_PROFILE_PLATFORMS: Record<string, string> = {
   affair: "911爆料",
   dirtyship: "DirtyShip",
   influencersgonewild: "InfluencersGoneWild",
+  missav: "MISSAV",
 };
 
 export function buildAuthorPresentation(input: AuthorPresentationInput): AuthorPresentation {
@@ -131,6 +132,9 @@ export function normalizePresentationSource(value: string) {
     case "influencersgonewild.com":
     case "igw":
       return "influencersgonewild";
+    case "missav":
+    case "missav.app":
+      return "missav";
     case "bdrq":
     case "bdrq45":
     case "bdrq45.cc":
@@ -210,6 +214,8 @@ function sourceDisplayName(source: string) {
       return "91热爆";
     case "badnews":
       return "Bad.news";
+    case "missav":
+      return "MISSAV";
     case "bdrq":
       return "背德人妻";
     case "avgood":

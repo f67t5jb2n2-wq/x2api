@@ -122,6 +122,19 @@ try:
         refresh_playback_urls as refresh_influencersgonewild_playback_urls,
         upsert_video_item as upsert_influencersgonewild_video_item,
     )
+    from collector.missav_refresh import refresh_playback_urls as refresh_missav_playback_urls
+    from collector.missav_source import (
+        MISSAV_CRITICAL_WINDOW_MINUTES,
+        MISSAV_DEFAULT_BASE_URL,
+        MISSAV_KIND,
+        MISSAV_REFRESH_WINDOW_MINUTES,
+        MISSAV_RETENTION_HOURS,
+        MISSAV_SITE_NAME,
+        MISSAV_SOURCE,
+        is_missav_target_url,
+        monitor_site as monitor_missav_site,
+        normalize_missav_target_value,
+    )
     from collector.dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
         DADAAFA_DEFAULT_BASE_URL,
@@ -355,6 +368,19 @@ except ModuleNotFoundError:
         refresh_playback_urls as refresh_influencersgonewild_playback_urls,
         upsert_video_item as upsert_influencersgonewild_video_item,
     )
+    from missav_refresh import refresh_playback_urls as refresh_missav_playback_urls
+    from missav_source import (
+        MISSAV_CRITICAL_WINDOW_MINUTES,
+        MISSAV_DEFAULT_BASE_URL,
+        MISSAV_KIND,
+        MISSAV_REFRESH_WINDOW_MINUTES,
+        MISSAV_RETENTION_HOURS,
+        MISSAV_SITE_NAME,
+        MISSAV_SOURCE,
+        is_missav_target_url,
+        monitor_site as monitor_missav_site,
+        normalize_missav_target_value,
+    )
     from dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
         DADAAFA_DEFAULT_BASE_URL,
@@ -556,6 +582,7 @@ DETAIL_LINK_PROFILE_SOURCES = {
     AFFAIR_SOURCE,
     DIRTYSHIP_SOURCE,
     INFLUENCERSGONEWILD_SOURCE,
+    MISSAV_SOURCE,
 }
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -751,6 +778,18 @@ def parse_target_value(target: str) -> dict[str, str]:
     if is_influencersgonewild_target_url(normalized):
         value = normalize_influencersgonewild_target_value(normalized)
         return {"source": INFLUENCERSGONEWILD_SOURCE, "kind": INFLUENCERSGONEWILD_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("missav:"):
+        value = normalize_missav_target_value(normalized[len("missav:") :].strip())
+        return {"source": MISSAV_SOURCE, "kind": MISSAV_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("missav.app:"):
+        value = normalize_missav_target_value(normalized[len("missav.app:") :].strip())
+        return {"source": MISSAV_SOURCE, "kind": MISSAV_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if is_missav_target_url(normalized):
+        value = normalize_missav_target_value(normalized)
+        return {"source": MISSAV_SOURCE, "kind": MISSAV_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
 
     if normalized.lower().startswith("bdrq:"):
         value = normalize_bdrq_target_value(normalized[len("bdrq:") :].strip())
@@ -977,6 +1016,8 @@ def format_target_row(target_row: dict) -> str:
         return f"dirtyship:{target_row['value']}"
     if target_row.get("source") == INFLUENCERSGONEWILD_SOURCE:
         return f"influencersgonewild:{target_row['value']}"
+    if target_row.get("source") == MISSAV_SOURCE:
+        return f"missav:{target_row['value']}"
     if target_row.get("source") == BDRQ_SOURCE:
         return f"bdrq:{target_row['value']}"
     if target_row.get("source") == MTIF_SOURCE:
@@ -1035,6 +1076,8 @@ def normalized_presentation_source(source: str | None) -> str:
         return DIRTYSHIP_SOURCE
     if source_key in {"influencersgonewild", "influencersgonewild.com", "igw"}:
         return INFLUENCERSGONEWILD_SOURCE
+    if source_key in {"missav", "missav.app"}:
+        return MISSAV_SOURCE
     if source_key in {"91", "cg91"}:
         return CG91_SOURCE
     if source_key in {"51", "baoliao51"}:
@@ -1082,6 +1125,7 @@ def source_display_name(source: str | None) -> str:
         AFFAIR_SOURCE: AFFAIR_SITE_NAME,
         DIRTYSHIP_SOURCE: DIRTYSHIP_SITE_NAME,
         INFLUENCERSGONEWILD_SOURCE: INFLUENCERSGONEWILD_SITE_NAME,
+        MISSAV_SOURCE: MISSAV_SITE_NAME,
         J18_SOURCE: J18_SITE_NAME,
         MTIF_SOURCE: MTIF_SITE_NAME,
         TIKPORN_SOURCE: TIKPORN_SITE_NAME,
@@ -4068,7 +4112,7 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
             DELETE FROM items i
             USING targets t
             WHERE t.id = i.target_id
-              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '91rb', '18j', 'avgood', '705hs', 'xxxtik', 'affair', 'dirtyship', 'influencersgonewild')
+              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '91rb', '18j', 'avgood', '705hs', 'xxxtik', 'affair', 'dirtyship', 'influencersgonewild', 'missav')
               AND i.expires_at <= NOW()
             """
         )
@@ -4218,6 +4262,7 @@ def query_records(
                     WHEN t.source = 'affair' THEN 'affair:' || t.value
                     WHEN t.source = 'dirtyship' THEN 'dirtyship:' || t.value
                     WHEN t.source = 'influencersgonewild' THEN 'influencersgonewild:' || t.value
+                    WHEN t.source = 'missav' THEN 'missav:' || t.value
                     WHEN t.source = '18j' THEN '18j:' || t.value
                     WHEN t.kind = 'keyword' THEN 'search:' || t.value
                     ELSE t.value
@@ -5525,6 +5570,38 @@ def command_refresh_influencersgonewild_playback_urls(args) -> int:
     return 0
 
 
+def command_monitor_missav(args) -> int:
+    base_url = args.base_url or MISSAV_DEFAULT_BASE_URL
+    retention_hours = args.retention_hours if args.retention_hours is not None else MISSAV_RETENTION_HOURS
+    if args.retention_days is not None:
+        retention_hours = args.retention_days * 24
+    max_records = args.max_records if args.max_records is not None else DEFAULT_MAX_RECORDS
+    if args.dry_run and not DATABASE_URL:
+        stats = monitor_missav_site(None, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=True)
+        print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+        return 0
+    with get_db_connection() as conn:
+        stats = monitor_missav_site(conn, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=args.dry_run)
+        if args.dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        if not args.skip_cleanup and not args.dry_run:
+            cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
+            conn.commit()
+            stats = {**stats, "cleanup": cleanup_stats}
+    print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+def command_refresh_missav_playback_urls(args) -> int:
+    with get_db_connection() as conn:
+        stats = refresh_missav_playback_urls(conn, limit=max(1, args.limit), refresh_window_minutes=max(1, args.refresh_window_minutes), critical_window_minutes=max(1, args.critical_window_minutes))
+        conn.commit()
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_monitor_badnews(args) -> int:
     base_url = args.base_url or BADNEWS_DEFAULT_BASE_URL
     retention_hours = args.retention_hours if args.retention_hours is not None else BADNEWS_RETENTION_HOURS
@@ -5856,6 +5933,17 @@ def build_parser() -> argparse.ArgumentParser:
     influencersgonewild_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
     influencersgonewild_monitor_parser.set_defaults(func=command_monitor_influencersgonewild)
 
+    missav_monitor_parser = subparsers.add_parser("monitor-missav", help="单独抓取 MISSAV 视频并入库")
+    missav_monitor_parser.add_argument("--base-url", default=MISSAV_DEFAULT_BASE_URL, help="MISSAV 分类入口；也可传 https://missav.app/vodtype/20/")
+    missav_monitor_parser.add_argument("--max-pages", type=int, default=1, help="单次最多分页数")
+    missav_monitor_parser.add_argument("--retention-hours", type=int, default=None, help=f"视频业务保留小时数，默认 {MISSAV_RETENTION_HOURS}")
+    missav_monitor_parser.add_argument("--retention-days", type=int, default=None, help="兼容旧参数：视频业务保留天数")
+    missav_monitor_parser.add_argument("--max-records", type=int, default=None, help="最大保留记录数")
+    missav_monitor_parser.add_argument("--skip-cleanup", action="store_true", help="本轮监控后不执行清理")
+    missav_monitor_parser.add_argument("--private-pool", action="store_true", help="不加入公共视频池")
+    missav_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
+    missav_monitor_parser.set_defaults(func=command_monitor_missav)
+
     badnews_monitor_parser = subparsers.add_parser("monitor-badnews", help="单独抓取 Bad.news 视频并入库")
     badnews_monitor_parser.add_argument("--base-url", default=BADNEWS_DEFAULT_BASE_URL, help="Bad.news 站点入口；也可传 https://bad.news/sort-new/page-1")
     badnews_monitor_parser.add_argument("--max-pages", type=int, default=2, help="单次最多分页数")
@@ -6023,6 +6111,12 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_influencersgonewild_parser.add_argument("--refresh-window-minutes", type=int, default=INFLUENCERSGONEWILD_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
     refresh_influencersgonewild_parser.add_argument("--critical-window-minutes", type=int, default=INFLUENCERSGONEWILD_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
     refresh_influencersgonewild_parser.set_defaults(func=command_refresh_influencersgonewild_playback_urls)
+
+    refresh_missav_parser = subparsers.add_parser("refresh-missav-playback-urls", help="刷新 MISSAV 播放 URL（仅处理带过期时间的历史记录）")
+    refresh_missav_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")
+    refresh_missav_parser.add_argument("--refresh-window-minutes", type=int, default=MISSAV_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
+    refresh_missav_parser.add_argument("--critical-window-minutes", type=int, default=MISSAV_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
+    refresh_missav_parser.set_defaults(func=command_refresh_missav_playback_urls)
 
     refresh_badnews_parser = subparsers.add_parser("refresh-badnews-playback-urls", help="刷新 Bad.news 播放 URL（仅处理带过期时间的历史记录）")
     refresh_badnews_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")

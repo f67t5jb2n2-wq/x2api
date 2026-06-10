@@ -299,6 +299,24 @@ test("parseTarget understands InfluencersGoneWild site targets", () => {
   });
 });
 
+test("parseTarget understands MISSAV site targets", () => {
+  assert.deepEqual(parseTarget("https://missav.app/vodtype/20/"), {
+    source: "missav",
+    kind: "site",
+    value: "https://missav.app/vodtype/20/",
+    normalizedValue: "missav.app",
+    tags: [],
+  });
+
+  assert.deepEqual(parseTarget("missav:missav.app/vodtype/20/page/2/"), {
+    source: "missav",
+    kind: "site",
+    value: "https://missav.app/vodtype/20/page/2/",
+    normalizedValue: "missav.app",
+    tags: [],
+  });
+});
+
 test("parseTarget understands BDRQ site targets", () => {
   assert.deepEqual(parseTarget("https://g3h4i5j6.bdrq45.cc/vodtype/4.html"), {
     source: "bdrq",

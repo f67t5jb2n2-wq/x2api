@@ -1,4 +1,4 @@
-export type TargetSource = "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin" | "18mh" | "rou" | "dadaafa" | "18j" | "1mtif" | "tikporn" | "91porna" | "91porn" | "91rb" | "badnews" | "bdrq" | "avgood" | "705hs" | "xxxtik" | "affair" | "dirtyship" | "influencersgonewild";
+export type TargetSource = "twitter" | "youtube" | "heiliao" | "cg91" | "baoliao51" | "douyin" | "18mh" | "rou" | "dadaafa" | "18j" | "1mtif" | "tikporn" | "91porna" | "91porn" | "91rb" | "badnews" | "bdrq" | "avgood" | "705hs" | "xxxtik" | "affair" | "dirtyship" | "influencersgonewild" | "missav";
 export type TargetKind = "user" | "keyword" | "channel" | "site";
 
 export type ParsedTarget = {
@@ -36,6 +36,7 @@ const XXXTIK_DEFAULT_URL = "https://xxxtik.com";
 const AFFAIR_DEFAULT_URL = "https://affair.zhkrsawaw.cc/category/jrgb/";
 const DIRTYSHIP_DEFAULT_URL = "https://dirtyship.com";
 const INFLUENCERSGONEWILD_DEFAULT_URL = "https://influencersgonewild.com";
+const MISSAV_DEFAULT_URL = "https://missav.app/vodtype/20/";
 
 function normalizeHeiliaoTargetValue(raw: string) {
   const value = (raw.trim() || HEILIAO_DEFAULT_URL).replace(/\/+$/, "");
@@ -448,6 +449,30 @@ function isInfluencersGoneWildTargetURL(raw: string) {
   }
 }
 
+function normalizeMissavTargetValue(raw: string) {
+  const value = raw.trim() || MISSAV_DEFAULT_URL;
+  const url = new URL(value.includes("://") ? value : `https://${value}`);
+  let path = url.pathname || "/vodtype/20/";
+  if (path === "/") {
+    path = "/vodtype/20/";
+  }
+  path = `/${path.replace(/^\/+|\/+$/g, "")}/`;
+  return `${url.protocol}//${url.host.toLowerCase()}${path}`;
+}
+
+function isMissavTargetURL(raw: string) {
+  try {
+    const value = raw.trim();
+    if (!value) {
+      return false;
+    }
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.host.toLowerCase() === "missav.app" || url.host.toLowerCase() === "www.missav.app";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeYouTubeChannelID(raw: string) {
   const value = raw.trim();
   if (!value) {
@@ -673,6 +698,21 @@ export function parseTarget(raw: string): ParsedTarget {
   if (isInfluencersGoneWildTargetURL(value)) {
     const normalized = normalizeInfluencersGoneWildTargetValue(value);
     return { source: "influencersgonewild", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("missav:")) {
+    const normalized = normalizeMissavTargetValue(value.slice("missav:".length));
+    return { source: "missav", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (value.toLowerCase().startsWith("missav.app:")) {
+    const normalized = normalizeMissavTargetValue(value.slice("missav.app:".length));
+    return { source: "missav", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  }
+
+  if (isMissavTargetURL(value)) {
+    const normalized = normalizeMissavTargetValue(value);
+    return { source: "missav", kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   }
 
   if (value.toLowerCase().startsWith("bdrq:")) {
@@ -948,6 +988,9 @@ export function formatTarget(target: ParsedTarget | { source?: TargetSource; kin
   if (target.source === "influencersgonewild") {
     return `influencersgonewild:${target.value}`;
   }
+  if (target.source === "missav") {
+    return `missav:${target.value}`;
+  }
   if (target.source === "bdrq") {
     return `bdrq:${target.value}`;
   }
@@ -1127,6 +1170,9 @@ function normalizeTargetSource(rawSource: unknown): TargetSource {
     case "influencersgonewild.com":
     case "igw":
       return "influencersgonewild";
+    case "missav":
+    case "missav.app":
+      return "missav";
     case "bdrq":
     case "bdrq45":
     case "bdrq45.cc":
@@ -1288,6 +1334,12 @@ function normalizeTargetKind(rawKind: unknown, source: TargetSource): TargetKind
     }
     throw new Error("InfluencersGoneWild targets must use site kind.");
   }
+  if (source === "missav") {
+    if (kind === "site") {
+      return "site";
+    }
+    throw new Error("MISSAV targets must use site kind.");
+  }
   if (source === "bdrq") {
     if (kind === "site") {
       return "site";
@@ -1391,6 +1443,9 @@ function parseObjectTarget(candidate: { source?: unknown; kind?: unknown; target
     parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   } else if (source === "influencersgonewild") {
     const normalized = normalizeInfluencersGoneWildTargetValue(candidate.target);
+    parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
+  } else if (source === "missav") {
+    const normalized = normalizeMissavTargetValue(candidate.target);
     parsed = { source, kind: "site", value: normalized, normalizedValue: normalizeHeiliaoTargetKey(normalized), tags: [] };
   } else if (source === "bdrq") {
     const normalized = normalizeBdrqTargetValue(candidate.target);

@@ -43,6 +43,7 @@ test("buildAuthorPresentation uses item detail links for site sources", () => {
     ["xxxtik", "xxxtik", "https://xxxtik.com/post/example"],
     ["dirtyship", "DirtyShip", "https://dirtyship.com/sample-video/"],
     ["influencersgonewild", "InfluencersGoneWild", "https://influencersgonewild.com/sample-post/"],
+    ["missav", "MISSAV", "https://missav.app/vodplay/261745-1-1/"],
   ] as const;
 
   for (const [source, platform, link] of cases) {

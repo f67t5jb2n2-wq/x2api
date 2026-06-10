@@ -281,6 +281,24 @@ test("parseTarget understands DirtyShip site targets", () => {
   });
 });
 
+test("parseTarget understands InfluencersGoneWild site targets", () => {
+  assert.deepEqual(parseTarget("https://influencersgonewild.com"), {
+    source: "influencersgonewild",
+    kind: "site",
+    value: "https://influencersgonewild.com",
+    normalizedValue: "influencersgonewild.com",
+    tags: [],
+  });
+
+  assert.deepEqual(parseTarget("igw:influencersgonewild.com/sample-post/"), {
+    source: "influencersgonewild",
+    kind: "site",
+    value: "https://influencersgonewild.com",
+    normalizedValue: "influencersgonewild.com",
+    tags: [],
+  });
+});
+
 test("parseTarget understands BDRQ site targets", () => {
   assert.deepEqual(parseTarget("https://g3h4i5j6.bdrq45.cc/vodtype/4.html"), {
     source: "bdrq",
@@ -556,6 +574,17 @@ test("parseTargets normalizes explicit source aliases", () => {
       kind: "site",
       value: "https://dirtyship.com",
       normalizedValue: "dirtyship.com",
+      category: "adult",
+      tags: [],
+    },
+  ]);
+
+  assert.deepEqual(parseTargets([{ source: "igw", kind: "site", target: "influencersgonewild.com/sample-post/", category: "adult" }]), [
+    {
+      source: "influencersgonewild",
+      kind: "site",
+      value: "https://influencersgonewild.com",
+      normalizedValue: "influencersgonewild.com",
       category: "adult",
       tags: [],
     },

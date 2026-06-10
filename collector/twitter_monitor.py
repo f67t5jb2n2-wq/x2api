@@ -68,6 +68,19 @@ try:
         refresh_playback_urls as refresh_bdrq_playback_urls,
         upsert_video_item as upsert_bdrq_video_item,
     )
+    from collector.affair_refresh import refresh_playback_urls as refresh_affair_playback_urls
+    from collector.affair_source import (
+        AFFAIR_CRITICAL_WINDOW_MINUTES,
+        AFFAIR_DEFAULT_BASE_URL,
+        AFFAIR_KIND,
+        AFFAIR_REFRESH_WINDOW_MINUTES,
+        AFFAIR_RETENTION_HOURS,
+        AFFAIR_SITE_NAME,
+        AFFAIR_SOURCE,
+        is_affair_target_url,
+        monitor_site as monitor_affair_site,
+        normalize_affair_target_value,
+    )
     from collector.dirtyship_refresh import refresh_playback_urls as refresh_dirtyship_playback_urls
     from collector.dirtyship_source import (
         DIRTYSHIP_CRITICAL_WINDOW_MINUTES,
@@ -94,6 +107,20 @@ try:
         normalize_hs705_target_value,
         refresh_playback_urls as refresh_hs705_playback_urls,
         upsert_video_item as upsert_hs705_video_item,
+    )
+    from collector.influencersgonewild_source import (
+        INFLUENCERSGONEWILD_CRITICAL_WINDOW_MINUTES,
+        INFLUENCERSGONEWILD_DEFAULT_BASE_URL,
+        INFLUENCERSGONEWILD_KIND,
+        INFLUENCERSGONEWILD_REFRESH_WINDOW_MINUTES,
+        INFLUENCERSGONEWILD_RETENTION_HOURS,
+        INFLUENCERSGONEWILD_SITE_NAME,
+        INFLUENCERSGONEWILD_SOURCE,
+        is_influencersgonewild_target_url,
+        monitor_site as monitor_influencersgonewild_site,
+        normalize_influencersgonewild_target_value,
+        refresh_playback_urls as refresh_influencersgonewild_playback_urls,
+        upsert_video_item as upsert_influencersgonewild_video_item,
     )
     from collector.dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
@@ -274,6 +301,19 @@ except ModuleNotFoundError:
         refresh_playback_urls as refresh_bdrq_playback_urls,
         upsert_video_item as upsert_bdrq_video_item,
     )
+    from affair_refresh import refresh_playback_urls as refresh_affair_playback_urls
+    from affair_source import (
+        AFFAIR_CRITICAL_WINDOW_MINUTES,
+        AFFAIR_DEFAULT_BASE_URL,
+        AFFAIR_KIND,
+        AFFAIR_REFRESH_WINDOW_MINUTES,
+        AFFAIR_RETENTION_HOURS,
+        AFFAIR_SITE_NAME,
+        AFFAIR_SOURCE,
+        is_affair_target_url,
+        monitor_site as monitor_affair_site,
+        normalize_affair_target_value,
+    )
     from dirtyship_refresh import refresh_playback_urls as refresh_dirtyship_playback_urls
     from dirtyship_source import (
         DIRTYSHIP_CRITICAL_WINDOW_MINUTES,
@@ -300,6 +340,20 @@ except ModuleNotFoundError:
         normalize_hs705_target_value,
         refresh_playback_urls as refresh_hs705_playback_urls,
         upsert_video_item as upsert_hs705_video_item,
+    )
+    from influencersgonewild_source import (
+        INFLUENCERSGONEWILD_CRITICAL_WINDOW_MINUTES,
+        INFLUENCERSGONEWILD_DEFAULT_BASE_URL,
+        INFLUENCERSGONEWILD_KIND,
+        INFLUENCERSGONEWILD_REFRESH_WINDOW_MINUTES,
+        INFLUENCERSGONEWILD_RETENTION_HOURS,
+        INFLUENCERSGONEWILD_SITE_NAME,
+        INFLUENCERSGONEWILD_SOURCE,
+        is_influencersgonewild_target_url,
+        monitor_site as monitor_influencersgonewild_site,
+        normalize_influencersgonewild_target_value,
+        refresh_playback_urls as refresh_influencersgonewild_playback_urls,
+        upsert_video_item as upsert_influencersgonewild_video_item,
     )
     from dadaafa_source import (
         DADAAFA_CRITICAL_WINDOW_MINUTES,
@@ -499,7 +553,9 @@ DETAIL_LINK_PROFILE_SOURCES = {
     AVGOOD_SOURCE,
     HS705_SOURCE,
     XXXTIK_SOURCE,
+    AFFAIR_SOURCE,
     DIRTYSHIP_SOURCE,
+    INFLUENCERSGONEWILD_SOURCE,
 }
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -652,6 +708,22 @@ def parse_target_value(target: str) -> dict[str, str]:
         value = normalize_xxxtik_target_value(normalized)
         return {"source": XXXTIK_SOURCE, "kind": XXXTIK_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
 
+    if normalized.lower().startswith("affair:"):
+        value = normalize_affair_target_value(normalized[len("affair:") :].strip())
+        return {"source": AFFAIR_SOURCE, "kind": AFFAIR_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("911bl:"):
+        value = normalize_affair_target_value(normalized[len("911bl:") :].strip())
+        return {"source": AFFAIR_SOURCE, "kind": AFFAIR_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("911bl.com:"):
+        value = normalize_affair_target_value(normalized[len("911bl.com:") :].strip())
+        return {"source": AFFAIR_SOURCE, "kind": AFFAIR_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if is_affair_target_url(normalized):
+        value = normalize_affair_target_value(normalized)
+        return {"source": AFFAIR_SOURCE, "kind": AFFAIR_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
     if normalized.lower().startswith("dirtyship:"):
         value = normalize_dirtyship_target_value(normalized[len("dirtyship:") :].strip())
         return {"source": DIRTYSHIP_SOURCE, "kind": DIRTYSHIP_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
@@ -663,6 +735,22 @@ def parse_target_value(target: str) -> dict[str, str]:
     if is_dirtyship_target_url(normalized):
         value = normalize_dirtyship_target_value(normalized)
         return {"source": DIRTYSHIP_SOURCE, "kind": DIRTYSHIP_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("influencersgonewild:"):
+        value = normalize_influencersgonewild_target_value(normalized[len("influencersgonewild:") :].strip())
+        return {"source": INFLUENCERSGONEWILD_SOURCE, "kind": INFLUENCERSGONEWILD_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("igw:"):
+        value = normalize_influencersgonewild_target_value(normalized[len("igw:") :].strip())
+        return {"source": INFLUENCERSGONEWILD_SOURCE, "kind": INFLUENCERSGONEWILD_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if normalized.lower().startswith("influencersgonewild.com:"):
+        value = normalize_influencersgonewild_target_value(normalized[len("influencersgonewild.com:") :].strip())
+        return {"source": INFLUENCERSGONEWILD_SOURCE, "kind": INFLUENCERSGONEWILD_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
+
+    if is_influencersgonewild_target_url(normalized):
+        value = normalize_influencersgonewild_target_value(normalized)
+        return {"source": INFLUENCERSGONEWILD_SOURCE, "kind": INFLUENCERSGONEWILD_KIND, "value": value, "normalized_value": normalize_site_target_key(value)}
 
     if normalized.lower().startswith("bdrq:"):
         value = normalize_bdrq_target_value(normalized[len("bdrq:") :].strip())
@@ -883,8 +971,12 @@ def format_target_row(target_row: dict) -> str:
         return f"705hs:{target_row['value']}"
     if target_row.get("source") == XXXTIK_SOURCE:
         return f"xxxtik:{target_row['value']}"
+    if target_row.get("source") == AFFAIR_SOURCE:
+        return f"affair:{target_row['value']}"
     if target_row.get("source") == DIRTYSHIP_SOURCE:
         return f"dirtyship:{target_row['value']}"
+    if target_row.get("source") == INFLUENCERSGONEWILD_SOURCE:
+        return f"influencersgonewild:{target_row['value']}"
     if target_row.get("source") == BDRQ_SOURCE:
         return f"bdrq:{target_row['value']}"
     if target_row.get("source") == MTIF_SOURCE:
@@ -937,8 +1029,12 @@ def normalized_presentation_source(source: str | None) -> str:
         return HS705_SOURCE
     if source_key in {"xxxtik", "xxxtik.com"}:
         return XXXTIK_SOURCE
+    if source_key in {"affair", "911bl", "911bl.com", "affair.zhkrsawaw.cc"}:
+        return AFFAIR_SOURCE
     if source_key in {"dirtyship", "dirtyship.com"}:
         return DIRTYSHIP_SOURCE
+    if source_key in {"influencersgonewild", "influencersgonewild.com", "igw"}:
+        return INFLUENCERSGONEWILD_SOURCE
     if source_key in {"91", "cg91"}:
         return CG91_SOURCE
     if source_key in {"51", "baoliao51"}:
@@ -983,7 +1079,9 @@ def source_display_name(source: str | None) -> str:
         AVGOOD_SOURCE: AVGOOD_SITE_NAME,
         HS705_SOURCE: HS705_SITE_NAME,
         XXXTIK_SOURCE: XXXTIK_SITE_NAME,
+        AFFAIR_SOURCE: AFFAIR_SITE_NAME,
         DIRTYSHIP_SOURCE: DIRTYSHIP_SITE_NAME,
+        INFLUENCERSGONEWILD_SOURCE: INFLUENCERSGONEWILD_SITE_NAME,
         J18_SOURCE: J18_SITE_NAME,
         MTIF_SOURCE: MTIF_SITE_NAME,
         TIKPORN_SOURCE: TIKPORN_SITE_NAME,
@@ -3970,7 +4068,7 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
             DELETE FROM items i
             USING targets t
             WHERE t.id = i.target_id
-              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '91rb', '18j', 'avgood', '705hs', 'xxxtik', 'dirtyship')
+              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '91rb', '18j', 'avgood', '705hs', 'xxxtik', 'affair', 'dirtyship', 'influencersgonewild')
               AND i.expires_at <= NOW()
             """
         )
@@ -4117,7 +4215,9 @@ def query_records(
                     WHEN t.source = 'avgood' THEN 'avgood:' || t.value
                     WHEN t.source = '705hs' THEN '705hs:' || t.value
                     WHEN t.source = 'xxxtik' THEN 'xxxtik:' || t.value
+                    WHEN t.source = 'affair' THEN 'affair:' || t.value
                     WHEN t.source = 'dirtyship' THEN 'dirtyship:' || t.value
+                    WHEN t.source = 'influencersgonewild' THEN 'influencersgonewild:' || t.value
                     WHEN t.source = '18j' THEN '18j:' || t.value
                     WHEN t.kind = 'keyword' THEN 'search:' || t.value
                     ELSE t.value
@@ -5329,6 +5429,38 @@ def command_refresh_xxxtik_playback_urls(args) -> int:
     return 0
 
 
+def command_monitor_affair(args) -> int:
+    base_url = args.base_url or AFFAIR_DEFAULT_BASE_URL
+    retention_hours = args.retention_hours if args.retention_hours is not None else AFFAIR_RETENTION_HOURS
+    if args.retention_days is not None:
+        retention_hours = args.retention_days * 24
+    max_records = args.max_records if args.max_records is not None else DEFAULT_MAX_RECORDS
+    if args.dry_run and not DATABASE_URL:
+        stats = monitor_affair_site(None, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=True)
+        print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+        return 0
+    with get_db_connection() as conn:
+        stats = monitor_affair_site(conn, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=args.dry_run)
+        if args.dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        if not args.skip_cleanup and not args.dry_run:
+            cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
+            conn.commit()
+            stats = {**stats, "cleanup": cleanup_stats}
+    print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+def command_refresh_affair_playback_urls(args) -> int:
+    with get_db_connection() as conn:
+        stats = refresh_affair_playback_urls(conn, limit=max(1, args.limit), refresh_window_minutes=max(1, args.refresh_window_minutes), critical_window_minutes=max(1, args.critical_window_minutes))
+        conn.commit()
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_monitor_dirtyship(args) -> int:
     base_url = args.base_url or DIRTYSHIP_DEFAULT_BASE_URL
     retention_hours = args.retention_hours if args.retention_hours is not None else DIRTYSHIP_RETENTION_HOURS
@@ -5359,6 +5491,39 @@ def command_refresh_dirtyship_playback_urls(args) -> int:
         conn.commit()
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     return 0
+
+
+def command_monitor_influencersgonewild(args) -> int:
+    base_url = args.base_url or INFLUENCERSGONEWILD_DEFAULT_BASE_URL
+    retention_hours = args.retention_hours if args.retention_hours is not None else INFLUENCERSGONEWILD_RETENTION_HOURS
+    if args.retention_days is not None:
+        retention_hours = args.retention_days * 24
+    max_records = args.max_records if args.max_records is not None else DEFAULT_MAX_RECORDS
+    if args.dry_run and not DATABASE_URL:
+        stats = monitor_influencersgonewild_site(None, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=True)
+        print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+        return 0
+    with get_db_connection() as conn:
+        stats = monitor_influencersgonewild_site(conn, base_url=base_url, max_pages=max(1, args.max_pages), retention_hours=max(1, retention_hours), public_pool=not args.private_pool, dry_run=args.dry_run)
+        if args.dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        if not args.skip_cleanup and not args.dry_run:
+            cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
+            conn.commit()
+            stats = {**stats, "cleanup": cleanup_stats}
+    print(json.dumps(stats, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+def command_refresh_influencersgonewild_playback_urls(args) -> int:
+    with get_db_connection() as conn:
+        stats = refresh_influencersgonewild_playback_urls(conn, limit=max(1, args.limit), refresh_window_minutes=max(1, args.refresh_window_minutes), critical_window_minutes=max(1, args.critical_window_minutes))
+        conn.commit()
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    return 0
+
 
 def command_monitor_badnews(args) -> int:
     base_url = args.base_url or BADNEWS_DEFAULT_BASE_URL
@@ -5658,6 +5823,16 @@ def build_parser() -> argparse.ArgumentParser:
     xxxtik_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
     xxxtik_monitor_parser.set_defaults(func=command_monitor_xxxtik)
 
+    affair_monitor_parser = subparsers.add_parser("monitor-affair", help="单独抓取 911爆料/Affair 视频并入库")
+    affair_monitor_parser.add_argument("--base-url", default=AFFAIR_DEFAULT_BASE_URL, help="911爆料分类入口；也可传 https://affair.zhkrsawaw.cc/category/jrgb/")
+    affair_monitor_parser.add_argument("--max-pages", type=int, default=2, help="单次最多分页数")
+    affair_monitor_parser.add_argument("--retention-hours", type=int, default=None, help=f"视频业务保留小时数，默认 {AFFAIR_RETENTION_HOURS}")
+    affair_monitor_parser.add_argument("--retention-days", type=int, default=None, help="兼容旧参数：视频业务保留天数")
+    affair_monitor_parser.add_argument("--max-records", type=int, default=None, help="最大保留记录数")
+    affair_monitor_parser.add_argument("--skip-cleanup", action="store_true", help="本轮监控后不执行清理")
+    affair_monitor_parser.add_argument("--private-pool", action="store_true", help="不加入公共视频池")
+    affair_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
+    affair_monitor_parser.set_defaults(func=command_monitor_affair)
 
     dirtyship_monitor_parser = subparsers.add_parser("monitor-dirtyship", help="单独抓取 DirtyShip 视频并入库")
     dirtyship_monitor_parser.add_argument("--base-url", default=DIRTYSHIP_DEFAULT_BASE_URL, help="DirtyShip 站点入口；也可传 https://dirtyship.com")
@@ -5669,6 +5844,17 @@ def build_parser() -> argparse.ArgumentParser:
     dirtyship_monitor_parser.add_argument("--private-pool", action="store_true", help="不加入公共视频池")
     dirtyship_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
     dirtyship_monitor_parser.set_defaults(func=command_monitor_dirtyship)
+
+    influencersgonewild_monitor_parser = subparsers.add_parser("monitor-influencersgonewild", help="单独抓取 InfluencersGoneWild 视频并入库")
+    influencersgonewild_monitor_parser.add_argument("--base-url", default=INFLUENCERSGONEWILD_DEFAULT_BASE_URL, help="InfluencersGoneWild 站点入口；也可传 https://influencersgonewild.com")
+    influencersgonewild_monitor_parser.add_argument("--max-pages", type=int, default=3, help="单次最多分页数")
+    influencersgonewild_monitor_parser.add_argument("--retention-hours", type=int, default=None, help=f"视频业务保留小时数，默认 {INFLUENCERSGONEWILD_RETENTION_HOURS}")
+    influencersgonewild_monitor_parser.add_argument("--retention-days", type=int, default=None, help="兼容旧参数：视频业务保留天数")
+    influencersgonewild_monitor_parser.add_argument("--max-records", type=int, default=None, help="最大保留记录数")
+    influencersgonewild_monitor_parser.add_argument("--skip-cleanup", action="store_true", help="本轮监控后不执行清理")
+    influencersgonewild_monitor_parser.add_argument("--private-pool", action="store_true", help="不加入公共视频池")
+    influencersgonewild_monitor_parser.add_argument("--dry-run", action="store_true", help="只解析和验证，不写入数据库")
+    influencersgonewild_monitor_parser.set_defaults(func=command_monitor_influencersgonewild)
 
     badnews_monitor_parser = subparsers.add_parser("monitor-badnews", help="单独抓取 Bad.news 视频并入库")
     badnews_monitor_parser.add_argument("--base-url", default=BADNEWS_DEFAULT_BASE_URL, help="Bad.news 站点入口；也可传 https://bad.news/sort-new/page-1")
@@ -5820,12 +6006,23 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_xxxtik_parser.add_argument("--critical-window-minutes", type=int, default=XXXTIK_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
     refresh_xxxtik_parser.set_defaults(func=command_refresh_xxxtik_playback_urls)
 
+    refresh_affair_parser = subparsers.add_parser("refresh-affair-playback-urls", help="刷新 911爆料/Affair 播放 URL（仅处理带过期时间的历史记录）")
+    refresh_affair_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")
+    refresh_affair_parser.add_argument("--refresh-window-minutes", type=int, default=AFFAIR_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
+    refresh_affair_parser.add_argument("--critical-window-minutes", type=int, default=AFFAIR_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
+    refresh_affair_parser.set_defaults(func=command_refresh_affair_playback_urls)
 
     refresh_dirtyship_parser = subparsers.add_parser("refresh-dirtyship-playback-urls", help="刷新 DirtyShip 播放 URL（仅处理带过期时间的历史记录）")
     refresh_dirtyship_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")
     refresh_dirtyship_parser.add_argument("--refresh-window-minutes", type=int, default=DIRTYSHIP_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
     refresh_dirtyship_parser.add_argument("--critical-window-minutes", type=int, default=DIRTYSHIP_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
     refresh_dirtyship_parser.set_defaults(func=command_refresh_dirtyship_playback_urls)
+
+    refresh_influencersgonewild_parser = subparsers.add_parser("refresh-influencersgonewild-playback-urls", help="刷新 InfluencersGoneWild 播放 URL（仅处理带过期时间的历史记录）")
+    refresh_influencersgonewild_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")
+    refresh_influencersgonewild_parser.add_argument("--refresh-window-minutes", type=int, default=INFLUENCERSGONEWILD_REFRESH_WINDOW_MINUTES, help="普通刷新窗口")
+    refresh_influencersgonewild_parser.add_argument("--critical-window-minutes", type=int, default=INFLUENCERSGONEWILD_CRITICAL_WINDOW_MINUTES, help="临界过期窗口")
+    refresh_influencersgonewild_parser.set_defaults(func=command_refresh_influencersgonewild_playback_urls)
 
     refresh_badnews_parser = subparsers.add_parser("refresh-badnews-playback-urls", help="刷新 Bad.news 播放 URL（仅处理带过期时间的历史记录）")
     refresh_badnews_parser.add_argument("--limit", type=int, default=30, help="单次最多处理条数")

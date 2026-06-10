@@ -227,6 +227,24 @@ test("parseTarget understands 705hs site targets", () => {
   });
 });
 
+test("parseTarget understands xxxtik site targets", () => {
+  assert.deepEqual(parseTarget("https://xxxtik.com"), {
+    source: "xxxtik",
+    kind: "site",
+    value: "https://xxxtik.com",
+    normalizedValue: "xxxtik.com",
+    tags: [],
+  });
+
+  assert.deepEqual(parseTarget("xxxtik:xxxtik.com/post/example"), {
+    source: "xxxtik",
+    kind: "site",
+    value: "https://xxxtik.com",
+    normalizedValue: "xxxtik.com",
+    tags: [],
+  });
+});
+
 test("parseTarget understands BDRQ site targets", () => {
   assert.deepEqual(parseTarget("https://g3h4i5j6.bdrq45.cc/vodtype/4.html"), {
     source: "bdrq",
@@ -469,6 +487,17 @@ test("parseTargets normalizes explicit source aliases", () => {
       kind: "site",
       value: "https://g3h4i5j6.bdrq45.cc",
       normalizedValue: "g3h4i5j6.bdrq45.cc",
+      category: "adult",
+      tags: [],
+    },
+  ]);
+
+  assert.deepEqual(parseTargets([{ source: "xxxtik.com", kind: "site", target: "xxxtik.com/post/example", category: "adult" }]), [
+    {
+      source: "xxxtik",
+      kind: "site",
+      value: "https://xxxtik.com",
+      normalizedValue: "xxxtik.com",
       category: "adult",
       tags: [],
     },

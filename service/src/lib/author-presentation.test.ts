@@ -39,6 +39,7 @@ test("buildAuthorPresentation uses item detail links for site sources", () => {
     ["bdrq", "背德人妻", "https://g3h4i5j6.bdrq45.cc/voddetail/769512.html"],
     ["avgood", "AvGood", "https://avgood.com/c/663855.html"],
     ["705hs", "992KP", "https://705hs.com/Html/91/50710.html"],
+    ["xxxtik", "xxxtik", "https://xxxtik.com/post/example"],
   ] as const;
 
   for (const [source, platform, link] of cases) {

@@ -26,9 +26,43 @@ type VideoFeedCursor = {
   lastTarget?: string | null;
 };
 
-type FeedPreference = {
-  categories: string[];
-  tags: string[];
+type FeedProfileFeature = {
+  value: string;
+  weight: number;
+};
+
+type FeedProfileFeatureType = "categories" | "tags" | "sources" | "targets" | "authors";
+type WindowedFeedProfile = OpenSearchJson & {
+  windows?: Record<string, OpenSearchJson>;
+};
+type DirectionalFeedProfile = OpenSearchJson & {
+  positive?: FeedProfileFeature[];
+  negative?: FeedProfileFeature[];
+};
+
+type UserFeedProfile = {
+  shortProfile: WindowedFeedProfile;
+  longProfile: WindowedFeedProfile;
+  negativeProfile: WindowedFeedProfile;
+  sourceProfile: DirectionalFeedProfile;
+  targetProfile: DirectionalFeedProfile;
+  authorProfile: DirectionalFeedProfile;
+  exploreRatio: number;
+  confidence: number;
+  eventCount: number;
+  hasProfile: boolean;
+};
+
+type UserFeedProfileRow = {
+  shortProfile: unknown;
+  longProfile: unknown;
+  negativeProfile: unknown;
+  sourceProfile: unknown;
+  targetProfile: unknown;
+  authorProfile: unknown;
+  exploreRatio: string | number | null;
+  confidence: string | number | null;
+  eventCount: number | null;
 };
 
 type OpenSearchFeedSource = {
@@ -124,6 +158,46 @@ type OpenSearchFeedRow = {
 
 type VideoKeyRow = {
   videoKey: string | null;
+};
+
+const VIDEO_SOURCE_VALUES = [
+  "youtube",
+  "heiliao",
+  "cg91",
+  "baoliao51",
+  "douyin",
+  "18mh",
+  "rou",
+  "dadaafa",
+  "18j",
+  "1mtif",
+  "tikporn",
+  "91porna",
+  "91porn",
+  "91rb",
+  "badnews",
+  "bdrq",
+  "avgood",
+  "705hs",
+  "xxxtik",
+  "affair",
+  "attach",
+  "dirtyship",
+  "influencersgonewild",
+  "missav",
+];
+
+const EMPTY_PROFILE: UserFeedProfile = {
+  shortProfile: {},
+  longProfile: {},
+  negativeProfile: {},
+  sourceProfile: {},
+  targetProfile: {},
+  authorProfile: {},
+  exploreRatio: 0.4,
+  confidence: 0,
+  eventCount: 0,
+  hasProfile: false,
 };
 
 function isVideoFeedCursor(value: unknown): value is VideoFeedCursor {
@@ -231,6 +305,10 @@ function normalizedUnique(values: Array<string | null | undefined>, max = 200) {
   return result;
 }
 
+function combineSeenVideoKeys(recentSeenVideoKeys: string[], cursorSeenVideoKeys: string[], max = 1000) {
+  return normalizedUnique([...recentSeenVideoKeys, ...cursorSeenVideoKeys], max);
+}
+
 async function getSubscribedTargetIds(clientId: string) {
   return cachedJson("os-feed-subscriptions", [clientId], 120, async () => {
     const sql = getSql();
@@ -244,7 +322,7 @@ async function getSubscribedTargetIds(clientId: string) {
 }
 
 async function getRecentSeenVideoKeys(clientId: string) {
-  return cachedJson("os-feed-seen-video-keys", [clientId], 45, async () => {
+  return cachedJson("os-feed-seen-video-keys-v2", [clientId], 45, async () => {
     const sql = getSql();
     const watchedVideoKey = videoKeyExpression("watched_item");
     const rows = asRows<VideoKeyRow>(await sql`
@@ -252,51 +330,91 @@ async function getRecentSeenVideoKeys(clientId: string) {
       FROM feed_events fe
       INNER JOIN items watched_item ON watched_item.id = fe.item_id
       WHERE fe.client_id = ${clientId}
-        AND fe.event_type IN ('impression', 'play', 'finish', 'dislike')
-        AND fe.created_at >= NOW() - INTERVAL '7 days'
+        AND fe.event_type IN ('impression', 'play', 'finish', 'like', 'share', 'skip', 'dislike')
+        AND fe.created_at >= NOW() - INTERVAL '30 days'
       LIMIT 1000
     `);
     return normalizedUnique(rows.map((row) => row.videoKey), 1000);
   });
 }
 
-async function getFeedPreference(clientId: string): Promise<FeedPreference> {
-  return cachedJson("os-feed-preference", [clientId], 300, async () => {
+function asJsonObject(value: unknown): OpenSearchJson {
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return asJsonObject(parsed);
+    } catch {
+      return {};
+    }
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as OpenSearchJson;
+  }
+  return {};
+}
+
+function numericValue(value: unknown, fallback: number) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return fallback;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function emptyProfile(): UserFeedProfile {
+  return {
+    ...EMPTY_PROFILE,
+    shortProfile: {},
+    longProfile: {},
+    negativeProfile: {},
+    sourceProfile: {},
+    targetProfile: {},
+    authorProfile: {},
+  };
+}
+
+async function getUserFeedProfile(clientId: string): Promise<UserFeedProfile> {
+  return cachedJson("os-feed-profile-v1", [clientId], 300, async () => {
     const sql = getSql();
-    const rows = asRows<{ category: string | null; tag: string | null; weight: number }>(await sql`
+    const rows = asRows<UserFeedProfileRow>(await sql`
       SELECT
-        LOWER(COALESCE(tp.category, '')) AS category,
-        LOWER(tag_values.name) AS tag,
-        SUM(CASE
-          WHEN fe.event_type = 'like' THEN 5
-          WHEN fe.event_type = 'finish' THEN 3
-          WHEN fe.event_type = 'share' THEN 4
-          WHEN fe.event_type = 'play' THEN 1
-          ELSE 0
-        END) AS weight
-      FROM feed_events fe
-      INNER JOIN items i ON i.id = fe.item_id
-      INNER JOIN targets t ON t.id = i.target_id
-      LEFT JOIN target_profiles tp ON tp.target_id = t.id
-      LEFT JOIN LATERAL (
-        SELECT tag.name
-        FROM item_tags it
-        INNER JOIN tags tag ON tag.id = it.tag_id
-        WHERE it.item_id = i.id
-        UNION
-        SELECT profile_tag.name
-        FROM jsonb_array_elements_text(COALESCE(tp.tags, '[]'::jsonb)) AS profile_tag(name)
-      ) tag_values ON TRUE
-      WHERE fe.client_id = ${clientId}
-        AND fe.created_at >= NOW() - INTERVAL '7 days'
-        AND fe.event_type IN ('play', 'finish', 'like', 'share')
-      GROUP BY LOWER(COALESCE(tp.category, '')), LOWER(tag_values.name)
-      ORDER BY weight DESC
-      LIMIT 50
+        short_profile AS "shortProfile",
+        long_profile AS "longProfile",
+        negative_profile AS "negativeProfile",
+        source_profile AS "sourceProfile",
+        target_profile AS "targetProfile",
+        author_profile AS "authorProfile",
+        explore_ratio AS "exploreRatio",
+        confidence,
+        event_count AS "eventCount"
+      FROM user_feed_profiles
+      WHERE client_id = ${clientId}
     `);
+    const row = rows[0];
+    if (!row) {
+      return emptyProfile();
+    }
+
     return {
-      categories: normalizedUnique(rows.map((row) => row.category), 8),
-      tags: normalizedUnique(rows.map((row) => row.tag), 20),
+      shortProfile: asJsonObject(row.shortProfile),
+      longProfile: asJsonObject(row.longProfile),
+      negativeProfile: asJsonObject(row.negativeProfile),
+      sourceProfile: asJsonObject(row.sourceProfile),
+      targetProfile: asJsonObject(row.targetProfile),
+      authorProfile: asJsonObject(row.authorProfile),
+      exploreRatio: clamp(numericValue(row.exploreRatio, EMPTY_PROFILE.exploreRatio), 0.05, 0.45),
+      confidence: clamp(numericValue(row.confidence, 0), 0, 1),
+      eventCount: Math.max(0, Math.floor(numericValue(row.eventCount, 0))),
+      hasProfile: true,
     };
   });
 }
@@ -406,6 +524,256 @@ function toRow(source: OpenSearchFeedSource): OpenSearchFeedRow | null {
   };
 }
 
+function featureArray(value: unknown): FeedProfileFeature[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return null;
+      }
+      const candidate = entry as Record<string, unknown>;
+      const normalized = normalizeKey(typeof candidate.value === "string" ? candidate.value : null);
+      const weight = numericValue(candidate.weight, 0);
+      return normalized && weight > 0 ? { value: normalized, weight } : null;
+    })
+    .filter((entry): entry is FeedProfileFeature => entry !== null);
+}
+
+function windowBucket(profile: WindowedFeedProfile, windowName: string) {
+  const windows = asJsonObject(profile.windows);
+  return asJsonObject(windows[windowName]);
+}
+
+function windowFeatures(profile: WindowedFeedProfile, windowName: string, featureType: FeedProfileFeatureType) {
+  return featureArray(windowBucket(profile, windowName)[featureType]);
+}
+
+function directionalFeatures(profile: DirectionalFeedProfile, direction: "positive" | "negative") {
+  return featureArray(profile[direction]);
+}
+
+function addWeightedFeatures(
+  accumulator: Map<string, number>,
+  features: FeedProfileFeature[],
+  multiplier: number,
+) {
+  for (const feature of features) {
+    accumulator.set(feature.value, (accumulator.get(feature.value) ?? 0) + feature.weight * multiplier);
+  }
+}
+
+function rankedProfileFeatures(accumulator: Map<string, number>, maxFeatures: number): FeedProfileFeature[] {
+  const ranked = [...accumulator.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  const strongest = ranked[0]?.[1] ?? 1;
+  return ranked.slice(0, maxFeatures).map(([value, score]) => ({
+    value,
+    weight: clamp(score / strongest, 0.2, 1),
+  }));
+}
+
+function aggregatePositiveFeatures(
+  profile: UserFeedProfile,
+  featureType: FeedProfileFeatureType,
+  mode: "personalized" | "explore",
+  maxFeatures: number,
+) {
+  const accumulator = new Map<string, number>();
+  if (mode === "personalized") {
+    addWeightedFeatures(accumulator, windowFeatures(profile.shortProfile, "1d", featureType), 1.8);
+    addWeightedFeatures(accumulator, windowFeatures(profile.shortProfile, "3d", featureType), 1.35);
+  }
+
+  addWeightedFeatures(accumulator, windowFeatures(profile.longProfile, "30d", featureType), mode === "explore" ? 0.95 : 0.85);
+  addWeightedFeatures(accumulator, windowFeatures(profile.longProfile, "90d", featureType), mode === "explore" ? 0.75 : 0.55);
+
+  if (mode === "personalized") {
+    if (featureType === "sources") {
+      addWeightedFeatures(accumulator, directionalFeatures(profile.sourceProfile, "positive"), 0.7);
+    } else if (featureType === "targets") {
+      addWeightedFeatures(accumulator, directionalFeatures(profile.targetProfile, "positive"), 0.8);
+    } else if (featureType === "authors") {
+      addWeightedFeatures(accumulator, directionalFeatures(profile.authorProfile, "positive"), 0.65);
+    }
+  }
+
+  return rankedProfileFeatures(accumulator, maxFeatures);
+}
+
+function aggregateNegativeFeatures(profile: UserFeedProfile, featureType: FeedProfileFeatureType, maxFeatures: number) {
+  const accumulator = new Map<string, number>();
+  addWeightedFeatures(accumulator, windowFeatures(profile.negativeProfile, "30d", featureType), 1);
+  if (featureType === "sources") {
+    addWeightedFeatures(accumulator, directionalFeatures(profile.sourceProfile, "negative"), 1.1);
+  } else if (featureType === "targets") {
+    addWeightedFeatures(accumulator, directionalFeatures(profile.targetProfile, "negative"), 1.1);
+  } else if (featureType === "authors") {
+    addWeightedFeatures(accumulator, directionalFeatures(profile.authorProfile, "negative"), 1.1);
+  }
+  return rankedProfileFeatures(accumulator, maxFeatures);
+}
+
+function profileFeatureClause(featureType: FeedProfileFeatureType, value: string) {
+  switch (featureType) {
+    case "categories":
+      return {
+        bool: {
+          should: [{ term: { category: value } }, { term: { tags: value } }],
+          minimum_should_match: 1,
+        },
+      };
+    case "tags":
+      return { term: { tags: value } };
+    case "sources":
+      return { term: { source: value } };
+    case "targets":
+      return { term: { target: value } };
+    case "authors":
+      return {
+        bool: {
+          should: [
+            { term: { author: value } },
+            { match_phrase: { fullname: value } },
+          ],
+          minimum_should_match: 1,
+        },
+      };
+  }
+}
+
+function addProfileBoostFunctions(
+  functions: unknown[],
+  profile: UserFeedProfile,
+  mode: "personalized" | "explore",
+) {
+  if (!profile.hasProfile || profile.eventCount === 0) {
+    return;
+  }
+
+  const confidenceBoost = mode === "personalized" ? 0.85 + profile.confidence * 0.45 : 0.7 + profile.confidence * 0.25;
+  const definitions: Array<{ type: FeedProfileFeatureType; max: number; baseWeight: number }> =
+    mode === "personalized"
+      ? [
+          { type: "categories", max: 8, baseWeight: 2.1 },
+          { type: "tags", max: 14, baseWeight: 1.75 },
+          { type: "sources", max: 5, baseWeight: 1.15 },
+          { type: "targets", max: 8, baseWeight: 1.45 },
+          { type: "authors", max: 8, baseWeight: 1.15 },
+        ]
+      : [
+          { type: "categories", max: 5, baseWeight: 0.75 },
+          { type: "tags", max: 8, baseWeight: 0.65 },
+          { type: "sources", max: 3, baseWeight: 0.35 },
+          { type: "targets", max: 3, baseWeight: 0.3 },
+          { type: "authors", max: 0, baseWeight: 0 },
+        ];
+
+  for (const definition of definitions) {
+    if (definition.max <= 0) {
+      continue;
+    }
+    for (const feature of aggregatePositiveFeatures(profile, definition.type, mode, definition.max)) {
+      functions.push({
+        filter: profileFeatureClause(definition.type, feature.value),
+        weight: Number((definition.baseWeight * confidenceBoost * feature.weight).toFixed(3)),
+      });
+    }
+  }
+}
+
+function negativeProfileClauses(profile: UserFeedProfile) {
+  if (!profile.hasProfile || profile.eventCount === 0) {
+    return [];
+  }
+
+  const definitions: Array<{ type: FeedProfileFeatureType; max: number }> = [
+    { type: "categories", max: 6 },
+    { type: "tags", max: 12 },
+    { type: "sources", max: 5 },
+    { type: "targets", max: 8 },
+    { type: "authors", max: 8 },
+  ];
+
+  return definitions.flatMap((definition) =>
+    aggregateNegativeFeatures(profile, definition.type, definition.max).map((feature) =>
+      profileFeatureClause(definition.type, feature.value),
+    ),
+  );
+}
+
+function rankingFunctions(profile: UserFeedProfile, mode: "personalized" | "explore") {
+  const functions: unknown[] = [
+    {
+      exp: {
+        sort_at: {
+          origin: "now",
+          scale: mode === "explore" ? "72h" : "36h",
+          decay: 0.5,
+        },
+      },
+      weight: mode === "explore" ? 2.4 : 3,
+    },
+    {
+      field_value_factor: {
+        field: "quality_score",
+        modifier: "log1p",
+        factor: mode === "explore" ? 1.25 : 1.1,
+        missing: 0,
+      },
+      weight: mode === "explore" ? 2.25 : 1.8,
+    },
+  ];
+
+  if (mode === "explore") {
+    functions.push(
+      {
+        filter: { range: { impressions: { lte: 2 } } },
+        weight: 0.85,
+      },
+      {
+        filter: { range: { plays: { lte: 1 } } },
+        weight: 0.45,
+      },
+    );
+  }
+
+  addProfileBoostFunctions(functions, profile, mode);
+  return functions;
+}
+
+function candidateQuery(filter: unknown[], mustNot: unknown[], profile: UserFeedProfile) {
+  const positive = {
+    constant_score: {
+      filter: {
+        bool: {
+          filter,
+          must_not: mustNot,
+        },
+      },
+      boost: 1,
+    },
+  };
+  const negativeClauses = negativeProfileClauses(profile);
+  if (negativeClauses.length === 0) {
+    return positive;
+  }
+
+  return {
+    boosting: {
+      positive,
+      negative: {
+        bool: {
+          should: negativeClauses,
+          minimum_should_match: 1,
+        },
+      },
+      negative_boost: Number(clamp(0.62 - profile.confidence * 0.25, 0.32, 0.62).toFixed(3)),
+    },
+  };
+}
+
 function buildFeedQuery(input: {
   size: number;
   source: VideoFeedQuery["source"];
@@ -415,7 +783,8 @@ function buildFeedQuery(input: {
   seenVideoKeys: string[];
   categoryFilters: string[];
   tagFilters: string[];
-  preference: FeedPreference;
+  profile: UserFeedProfile;
+  mode: "personalized" | "explore";
 }) {
   const filter: unknown[] = [
     { term: { has_video: true } },
@@ -423,7 +792,7 @@ function buildFeedQuery(input: {
     {
       bool: {
         should: [
-          { bool: { must_not: [{ terms: { source: ["youtube", "heiliao", "cg91", "baoliao51", "douyin", "18mh", "rou", "dadaafa", "18j", "1mtif", "tikporn", "91porna", "91porn", "91rb", "badnews", "bdrq", "avgood", "705hs", "xxxtik", "affair", "attach", "dirtyship", "influencersgonewild", "missav"] } }] } },
+          { bool: { must_not: [{ terms: { source: VIDEO_SOURCE_VALUES } }] } },
           { range: { video_url_expires_at: { gt: "now+10m" } } },
         ],
         minimum_should_match: 1,
@@ -463,64 +832,17 @@ function buildFeedQuery(input: {
     mustNot.push(seenVideoKeyTerms);
   }
 
-  const functions: unknown[] = [
-    {
-      exp: {
-        sort_at: {
-          origin: "now",
-          scale: "36h",
-          decay: 0.5,
-        },
-      },
-      weight: 3,
-    },
-    {
-      field_value_factor: {
-        field: "quality_score",
-        modifier: "log1p",
-        factor: 1.1,
-        missing: 0,
-      },
-      weight: 1.8,
-    },
-  ];
-
-  if (input.preference.categories.length > 0) {
-    functions.push({
-      filter: {
-        bool: {
-          should: [
-            { terms: { category: input.preference.categories } },
-            { terms: { tags: input.preference.categories } },
-          ],
-          minimum_should_match: 1,
-        },
-      },
-      weight: 1.4,
-    });
-  }
-
-  if (input.preference.tags.length > 0) {
-    functions.push({
-      filter: { terms: { tags: input.preference.tags } },
-      weight: 1.25,
-    });
-  }
+  const functions = rankingFunctions(input.profile, input.mode);
 
   return {
     size: input.size,
     track_total_hits: false,
     query: {
       function_score: {
-        query: {
-          bool: {
-            filter,
-            must_not: mustNot,
-          },
-        },
+        query: candidateQuery(filter, mustNot, input.profile),
         functions,
         score_mode: "sum",
-        boost_mode: "replace",
+        boost_mode: "multiply",
       },
     },
     sort: [
@@ -534,6 +856,94 @@ function buildFeedQuery(input: {
 
 function getHits(response: OpenSearchSearchResponse) {
   return response.body?.hits?.hits ?? response.hits?.hits ?? [];
+}
+
+function rowsFromResponse(response: OpenSearchSearchResponse) {
+  return getHits(response)
+    .map((hit) => (hit._source ? toRow(hit._source) : null))
+    .filter((row): row is OpenSearchFeedRow => row !== null);
+}
+
+function uniqueCandidates(candidates: OpenSearchFeedRow[]) {
+  const result: OpenSearchFeedRow[] = [];
+  const seenIds = new Set<string>();
+  const seenGuids = new Set<string>();
+  const seenVideoKeys = new Set<string>();
+
+  for (const candidate of candidates) {
+    const guidKey = normalizeKey(candidate.guid);
+    const videoKey = normalizeKey(candidate.videoKey);
+    if (seenIds.has(candidate.id) || (guidKey && seenGuids.has(guidKey)) || (videoKey && seenVideoKeys.has(videoKey))) {
+      continue;
+    }
+
+    result.push(candidate);
+    seenIds.add(candidate.id);
+    if (guidKey) {
+      seenGuids.add(guidKey);
+    }
+    if (videoKey) {
+      seenVideoKeys.add(videoKey);
+    }
+  }
+
+  return result;
+}
+
+function selectFeedItems(input: {
+  personalizedCandidates: OpenSearchFeedRow[];
+  exploreCandidates: OpenSearchFeedRow[];
+  profile: UserFeedProfile;
+  limit: number;
+  previousLastAuthor?: string | null;
+  previousLastTarget?: string | null;
+}) {
+  const exploreRatio = input.profile.hasProfile
+    ? input.profile.exploreRatio
+    : Math.max(input.profile.exploreRatio, EMPTY_PROFILE.exploreRatio);
+  const exploreTarget = Math.min(Math.max(Math.round(input.limit * exploreRatio), input.limit >= 8 ? 1 : 0), Math.ceil(input.limit * 0.4));
+
+  const personalizedLimit = Math.max(input.limit - exploreTarget, 0);
+  let selected = selectDiverseVideoItems({
+    candidates: uniqueCandidates(input.personalizedCandidates),
+    limit: personalizedLimit,
+    previousLastAuthor: input.previousLastAuthor,
+    previousLastTarget: input.previousLastTarget,
+    enforceLimits: true,
+    enforceConsecutive: true,
+  });
+
+  selected = selectDiverseVideoItems({
+    selected,
+    candidates: uniqueCandidates(input.exploreCandidates),
+    limit: input.limit,
+    previousLastAuthor: input.previousLastAuthor,
+    previousLastTarget: input.previousLastTarget,
+    enforceLimits: true,
+    enforceConsecutive: true,
+  });
+
+  selected = selectDiverseVideoItems({
+    selected,
+    candidates: uniqueCandidates(input.personalizedCandidates),
+    limit: input.limit,
+    previousLastAuthor: input.previousLastAuthor,
+    previousLastTarget: input.previousLastTarget,
+    enforceLimits: false,
+    enforceConsecutive: true,
+  });
+
+  selected = selectDiverseVideoItems({
+    selected,
+    candidates: uniqueCandidates([...input.exploreCandidates, ...input.personalizedCandidates]),
+    limit: input.limit,
+    previousLastAuthor: input.previousLastAuthor,
+    previousLastTarget: input.previousLastTarget,
+    enforceLimits: false,
+    enforceConsecutive: false,
+  });
+
+  return selected.slice(0, input.limit);
 }
 
 export async function listVideoFeedFromOpenSearch(query: VideoFeedQuery) {
@@ -551,17 +961,17 @@ export async function listVideoFeedFromOpenSearch(query: VideoFeedQuery) {
   const seenGuids = compactVideoFeedCursorSeenValues(cursor?.seenGuids ?? []);
   const cursorSeenVideoKeys = compactVideoFeedCursorSeenValues(cursor?.seenVideoKeys ?? []);
 
-  const [subscribedTargetIds, recentSeenVideoKeys, preference, categoryFilters] = await Promise.all([
+  const [subscribedTargetIds, recentSeenVideoKeys, profile, categoryFilters] = await Promise.all([
     getSubscribedTargetIds(query.clientId),
     getRecentSeenVideoKeys(query.clientId),
-    getFeedPreference(query.clientId),
+    getUserFeedProfile(query.clientId),
     normalizeCategoryFilters(normalizedCategories),
   ]);
-  const seenVideoKeys = compactVideoFeedCursorSeenValues([...recentSeenVideoKeys, ...cursorSeenVideoKeys]);
+  const seenVideoKeys = combineSeenVideoKeys(recentSeenVideoKeys, cursorSeenVideoKeys);
 
-  const size = Math.max(limit * 8, 80);
-  const body = buildFeedQuery({
-    size,
+  const personalizedSize = Math.max(limit * 8, 80);
+  const exploreSize = Math.max(Math.ceil(limit * Math.max(profile.exploreRatio, 0.2) * 8), 24);
+  const baseInput = {
     source,
     subscribedTargetIds,
     seenIds,
@@ -569,27 +979,40 @@ export async function listVideoFeedFromOpenSearch(query: VideoFeedQuery) {
     seenVideoKeys,
     categoryFilters,
     tagFilters: normalizedTags,
-    preference,
+    profile,
+  };
+  const personalizedBody = buildFeedQuery({
+    ...baseInput,
+    size: personalizedSize,
+    mode: "personalized",
+  });
+  const exploreBody = buildFeedQuery({
+    ...baseInput,
+    size: exploreSize,
+    mode: "explore",
   });
 
-  const searchParams = {
+  const personalizedSearchParams = {
     index: getOpenSearchItemsIndex(),
-    body,
+    body: personalizedBody,
   } as unknown as Parameters<typeof client.search>[0];
-  const response = (await client.search(searchParams)) as unknown as OpenSearchSearchResponse;
-  const candidates = getHits(response)
-    .map((hit) => (hit._source ? toRow(hit._source) : null))
-    .filter((row): row is OpenSearchFeedRow => row !== null);
+  const exploreSearchParams = {
+    index: getOpenSearchItemsIndex(),
+    body: exploreBody,
+  } as unknown as Parameters<typeof client.search>[0];
+  const [personalizedResponse, exploreResponse] = (await Promise.all([
+    client.search(personalizedSearchParams),
+    client.search(exploreSearchParams),
+  ])) as unknown as [OpenSearchSearchResponse, OpenSearchSearchResponse];
 
-  const selected = selectDiverseVideoItems({
-    candidates,
+  const items = selectFeedItems({
+    personalizedCandidates: rowsFromResponse(personalizedResponse),
+    exploreCandidates: rowsFromResponse(exploreResponse),
+    profile,
     limit,
     previousLastAuthor: cursor?.lastAuthor,
     previousLastTarget: cursor?.lastTarget,
-    enforceLimits: false,
-    enforceConsecutive: true,
   });
-  const items = selected.slice(0, limit);
   const nextCursorPayload = buildVideoFeedNextCursorPayload({
     seenIds,
     seenGuids,

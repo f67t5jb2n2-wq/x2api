@@ -634,8 +634,8 @@ async function listVideoFeedFromPostgres(query: VideoFeedQuery) {
           FROM feed_events fe
           INNER JOIN items watched_item ON watched_item.id = fe.item_id
           WHERE fe.client_id = ${query.clientId}
-            AND fe.event_type IN ('impression', 'play', 'finish', 'dislike')
-            AND fe.created_at >= NOW() - INTERVAL '7 days'
+            AND fe.event_type IN ('impression', 'play', 'finish', 'like', 'share', 'skip', 'dislike')
+            AND fe.created_at >= NOW() - INTERVAL '30 days'
             AND ${watchedVideoKey} = ${itemVideoKey}
         )
         AND (

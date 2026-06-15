@@ -28,7 +28,7 @@ on:
       event_days:
         description: 'feed_events 明细保留天数'
         required: false
-        default: '14'
+        default: '90'
       video_days:
         description: '普通视频保留天数'
         required: false
@@ -79,6 +79,15 @@ jobs:
         run: |
           python scripts/backfill_video_tags.py --apply --limit "${TAG_LIMIT}"
 
+      - name: Update user feed profiles
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          REDIS_NAMESPACE: x2api
+          DB_LOCK_MAX_WRITERS: "1"
+        run: |
+          python scripts/update_user_feed_profiles.py --lookback-days 90
+
       - name: Cleanup video feed data
         if: inputs.apply_cleanup != 'false'
         env:
@@ -86,11 +95,14 @@ jobs:
           REDIS_URL: ${{ secrets.REDIS_URL }}
           REDIS_NAMESPACE: x2api
           HIGH_SCORE_THRESHOLD: ${{ inputs.high_score_threshold || '20' }}
-          EVENT_DAYS: ${{ inputs.event_days || vars.VIDEO_FEED_EVENT_DAYS || '14' }}
+          EVENT_DAYS: ${{ inputs.event_days || vars.VIDEO_FEED_EVENT_DAYS || '90' }}
           VIDEO_DAYS: ${{ inputs.video_days || vars.VIDEO_FEED_VIDEO_DAYS || '45' }}
           PUBLIC_VIDEO_DAYS: ${{ inputs.public_video_days || vars.VIDEO_FEED_PUBLIC_VIDEO_DAYS || '75' }}
           HIGH_SCORE_VIDEO_DAYS: ${{ inputs.high_score_video_days || vars.VIDEO_FEED_HIGH_SCORE_VIDEO_DAYS || '120' }}
         run: |
+          if [ "${EVENT_DAYS}" -lt 90 ]; then
+            EVENT_DAYS=90
+          fi
           python scripts/cleanup_video_feed_data.py \
             --apply \
             --event-days "${EVENT_DAYS}" \

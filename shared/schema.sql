@@ -588,6 +588,22 @@ CREATE TABLE IF NOT EXISTS feed_events (
     )
 );
 
+CREATE TABLE IF NOT EXISTS user_feed_profiles (
+    client_id UUID PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+    short_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    long_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    negative_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    target_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    author_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    explore_ratio NUMERIC(4,3) NOT NULL DEFAULT 0.200,
+    confidence NUMERIC(4,3) NOT NULL DEFAULT 0,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    last_event_at TIMESTAMPTZ,
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_target_profiles_public_pool ON target_profiles (is_public_pool, weight DESC);
 CREATE INDEX IF NOT EXISTS idx_tags_type_weight ON tags (type, weight DESC, name);
 CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags (tag_id);
@@ -596,7 +612,12 @@ CREATE INDEX IF NOT EXISTS idx_feed_events_client_item ON feed_events (client_id
 CREATE INDEX IF NOT EXISTS idx_feed_events_client_recent_video_seen
     ON feed_events (client_id, event_type, created_at DESC, item_id)
     WHERE event_type IN ('impression', 'play', 'finish', 'dislike');
+CREATE INDEX IF NOT EXISTS idx_feed_events_client_recent_video_seen_v2
+    ON feed_events (client_id, created_at DESC, item_id)
+    WHERE event_type IN ('impression', 'play', 'finish', 'like', 'share', 'skip', 'dislike');
 CREATE INDEX IF NOT EXISTS idx_feed_events_created_at ON feed_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_feed_profiles_updated_at ON user_feed_profiles (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_feed_profiles_confidence ON user_feed_profiles (confidence DESC, event_count DESC);
 
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
@@ -621,5 +642,11 @@ EXECUTE FUNCTION set_updated_at();
 DROP TRIGGER IF EXISTS set_categories_updated_at ON categories;
 CREATE TRIGGER set_categories_updated_at
 BEFORE UPDATE ON categories
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS set_user_feed_profiles_updated_at ON user_feed_profiles;
+CREATE TRIGGER set_user_feed_profiles_updated_at
+BEFORE UPDATE ON user_feed_profiles
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();

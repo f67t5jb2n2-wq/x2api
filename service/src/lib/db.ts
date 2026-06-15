@@ -2,7 +2,7 @@ import { Pool, type QueryResult } from "pg";
 
 import { getRequiredEnv } from "@/lib/env";
 
-type QueryPrimitive = string | number | boolean | Date | null | undefined;
+type QueryPrimitive = string | number | boolean | Date | null | undefined | readonly (string | number | boolean | Date | null)[];
 type QueryValue = QueryPrimitive | QueryChunk;
 
 export type QueryChunk = {

@@ -2,7 +2,7 @@ import { requireClient } from "@/lib/auth";
 import { jsonError, jsonOk } from "@/lib/http";
 import { PaginationInputError } from "@/lib/pagination";
 import { parseStringListParam } from "@/lib/query-params";
-import { listVideoFeed, parseVideoFeedSource } from "@/lib/video-feed-service";
+import { listVideoFeed, parseVideoFeedSource, recordVideoImpressions } from "@/lib/video-feed-service";
 
 function publicApiOrigin(requestUrl: string) {
   const configuredBaseUrl = process.env.X2API_PUBLIC_BASE_URL?.trim();
@@ -55,6 +55,11 @@ export async function GET(request: Request) {
       source: parseVideoFeedSource(searchParams.get("source")),
     };
     const result = await listVideoFeed(query);
+    await recordVideoImpressions({
+      clientId: client.id,
+      itemIds: result.items.map((item) => item.id),
+      metadata: { source: "video_feed_get" },
+    });
     return jsonOk(absolutizeRelativeVideoUrls(result, request.url));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to query video feed.";

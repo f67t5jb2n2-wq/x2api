@@ -57,6 +57,18 @@ export async function cacheSetJson(scope: string, parts: unknown[], value: unkno
   }
 }
 
+export async function cacheDeleteJson(scope: string, parts: unknown[]) {
+  const client = await getRedisClient();
+  if (!client) {
+    return;
+  }
+  try {
+    await client.del(cacheKey(scope, parts));
+  } catch (error) {
+    console.warn(`[redis-cache] delete failed scope=${scope}`, error);
+  }
+}
+
 export async function cachedJson<T>(scope: string, parts: unknown[], ttlSeconds: number, loader: () => Promise<T>): Promise<T> {
   const cached = await cacheGetJson<T>(scope, parts);
   if (cached !== null) {

@@ -14,7 +14,7 @@ from psycopg import connect
 from psycopg.rows import dict_row
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_LEXICON_URL = "https://raw.githubusercontent.com/M1Z2105a4/resource/main/ttt_lexicon.json"
+DEFAULT_LEXICON_URL = "https://raw.githubusercontent.com/M1Z2105a4/resource/refs/heads/main/feed_lexicon.json"
 
 
 @dataclass(frozen=True)
@@ -31,8 +31,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--apply", action="store_true", help="Write changes. Without this flag, only report matches.")
     parser.add_argument("--limit", type=int, default=500, help="Maximum untagged video items to scan.")
-    parser.add_argument("--lexicon-url", default=DEFAULT_LEXICON_URL, help="Remote ttt_lexicon.json URL.")
-    parser.add_argument("--lexicon-file", help="Local ttt_lexicon.json path. Overrides --lexicon-url.")
+    parser.add_argument("--lexicon-url", default=DEFAULT_LEXICON_URL, help="Remote feed_lexicon.json URL.")
+    parser.add_argument("--lexicon-file", help="Local feed_lexicon.json path. Overrides --lexicon-url.")
     parser.add_argument("--default-tag", default="未分类", help="Fallback tag when nothing matches.")
     parser.add_argument(
         "--min-rule-score",

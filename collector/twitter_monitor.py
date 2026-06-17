@@ -3153,21 +3153,24 @@ def refresh_youtube_playback_urls(conn, limit: int, refresh_window_minutes: int,
             return cur.fetchall()
 
     def refresh_item(row: dict) -> bool:
+        source = fetch_opensearch_document(str(row["id"]))
         payload = {
             "guid": row["guid"],
             "provider_video_id": row["metadata"].get("youtube_video_id"),
             "channel_id": row["metadata"].get("youtube_channel_id"),
-            "link": row["metadata"].get("watch_url") or row["link"],
+            "link": row["metadata"].get("watch_url") or source.get("link"),
             "expires_at": row["expires_at"].isoformat(),
             "published_at": row["published_at"].isoformat() if row.get("published_at") else row["stored_at"].isoformat(),
-            "title": row.get("title"),
-            "content": row.get("content"),
-            "author": row.get("author"),
-            "fullname": row.get("fullname"),
-            "images": row.get("images") or [],
+            "title": source.get("title"),
+            "content": source.get("content"),
+            "author": source.get("author"),
+            "fullname": source.get("fullname"),
+            "images": source.get("images") or [],
             "video_poster_url": row["metadata"].get("video_poster_url"),
         }
         try:
+            if not payload["link"]:
+                raise ValueError("missing OpenSearch watch link")
             resolved_payload = resolve_youtube_playback_url(payload["link"])
             metadata = row["metadata"] | {
                 "resolver": "clipto",

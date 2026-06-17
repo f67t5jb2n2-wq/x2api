@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: '执行动作: inspect / cleanup / rewrite_items / apply_schema / align_items_os'
+        description: '执行动作: inspect / cleanup / rewrite_items / drop_heavy_columns / apply_schema / align_items_os'
         required: true
         default: 'inspect'
       event_days:
@@ -115,6 +115,19 @@ jobs:
                 args+=(--drop-columns)
               fi
               python scripts/rewrite_items_compact.py "${args[@]}"
+              python scripts/inspect_pg_usage.py
+              ;;
+            drop_heavy_columns)
+              python - <<'PY'
+              import os
+              from pathlib import Path
+              import psycopg
+
+              sql = Path("scripts/drop_items_heavy_columns.sql").read_text(encoding="utf-8")
+              with psycopg.connect(os.environ["DATABASE_URL"], prepare_threshold=None) as conn:
+                  with conn.cursor() as cur:
+                      cur.execute(sql)
+              PY
               python scripts/inspect_pg_usage.py
               ;;
             apply_schema)

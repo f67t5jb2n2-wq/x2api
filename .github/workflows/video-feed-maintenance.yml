@@ -52,7 +52,7 @@ jobs:
       shard_count: ${{ steps.matrix.outputs.shard_count }}
 
     steps:
-      - name: Build sync shard matrix
+      - name: Build shard matrix
         id: matrix
         env:
           INPUT_SHARD_INDEX: ${{ inputs.shard_index || '' }}

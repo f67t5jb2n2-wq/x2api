@@ -16,8 +16,8 @@
 1. GitHub Actions 按计划触发采集任务
 2. Python 采集器从数据库读取当前所有活跃订阅目标
 3. 采集器通过 Nitter/X 相关来源抓取指定用户或关键词内容
-4. 新内容先写入 PostgreSQL，并在采集链路内实时补写到 OpenSearch
-5. Vercel 上的 Next.js 服务优先读取 OpenSearch，对外提供 JSON API 与 RSS；PostgreSQL 主要保留关系数据与轻量锚点
+4. 新内容在主链路内直接双写：PostgreSQL 写轻量控制字段，OpenSearch 写重内容文档
+5. Vercel 上的 Next.js 服务直接读取 OpenSearch，对外提供 JSON API 与 RSS；PostgreSQL 仅保留关系数据与轻量锚点
 6. 客户端使用 `apiKey` 管理订阅、查询数据
 7. RSS 使用 `feedToken` 生成专属订阅链接，供 RSS 阅读器或外部系统消费
 
@@ -25,7 +25,7 @@
 
 #### A. 采集模块 `collector/`
 
-- 负责抓取 X/Twitter 相关内容
+- 负责抓取 X/Twitter 相关内容与各类站点视频
 - 入口脚本：`collector/twitter_monitor.py`
 - 支持：
   - 注册客户端
@@ -33,7 +33,7 @@
   - 手动查询
   - 定时采集
   - 清理历史数据
-  - 采集完成后的 OpenSearch 实时补写与 PG 轻量压缩
+  - 采集写入时的 PG 轻量双写与 OpenSearch 重内容双写
 
 #### B. 服务模块 `service/`
 
@@ -64,9 +64,7 @@
 OpenSearch 索引：
 
 - `x2_items`
-  - API、RSS、视频流的主查询索引
-- `x2_sync_meta`
-  - 兼容历史迁移与回补用的同步元数据
+  - API、RSS、视频流的主查询索引，也是 items 重内容的唯一事实来源
 
 #### D. 调度模块 `.github/workflows/`
 
@@ -192,7 +190,7 @@ https://x2api-service.vercel.app
 说明：
 
 - 稳态运行不再依赖任何 PG->OpenSearch 常规同步脚本
-- 文档新增、视频统计更新、过期删除，都会在主业务链路内同步到 OpenSearch
+- 文档新增、视频统计更新、过期删除，都会在主业务链路内直接写入或删除 OpenSearch
 - PostgreSQL 中的 `items` 仅保留轻量关系/控制字段，重内容字段由 OpenSearch 承载
 
 ### 5.2 内容类型

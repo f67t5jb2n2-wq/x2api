@@ -396,6 +396,7 @@ export async function listVideoFeed(query: VideoFeedQuery) {
 async function invalidateVideoFeedEventCaches(clientId: string) {
   await Promise.all([
     cacheDeleteJson("os-feed-seen-video-keys-v2", [clientId]),
+    cacheDeleteJson("os-feed-seen-identities-v1", [clientId]),
     cacheDeleteJson("os-feed-profile-v1", [clientId]),
   ]);
 }

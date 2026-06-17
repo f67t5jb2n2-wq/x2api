@@ -1,5 +1,7 @@
 # x2ding 服务端接口文档
 
+> 说明：`items` 公共池、双层 `entry/video_variant` 模型，以及 `草榴社区` 接入方案，已在 [CAOLIU_PUBLIC_POOL_FINAL_DESIGN.md](/Users/xhchen/code/apple/x2api/docs/CAOLIU_PUBLIC_POOL_FINAL_DESIGN.md) 定义为新的设计基线。当前文档中的相关章节在该方案正式落地前，不能再作为这部分能力的最终事实来源。
+
 本文档说明 `x2api` 服务端的整体架构、核心模块、鉴权方式、JSON 查询接口，以及 RSS 订阅接口。
 
 适用场景：

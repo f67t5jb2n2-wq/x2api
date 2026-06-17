@@ -1,0 +1,127 @@
+name: PG Emergency Recovery
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '执行动作: inspect / cleanup / rewrite_items / apply_schema'
+        required: true
+        default: 'inspect'
+      event_days:
+        description: 'feed_events 保留天数'
+        required: false
+        default: '90'
+      non_video_days:
+        description: '非视频 items 保留天数'
+        required: false
+        default: '7'
+      low_score_video_days:
+        description: '低分视频保留天数'
+        required: false
+        default: '7'
+      video_days:
+        description: '普通视频保留天数'
+        required: false
+        default: '15'
+      public_video_days:
+        description: '公共池视频保留天数'
+        required: false
+        default: '30'
+      high_score_video_days:
+        description: '高分视频保留天数'
+        required: false
+        default: '45'
+      high_score_threshold:
+        description: '高分阈值'
+        required: false
+        default: '20'
+      low_score_threshold:
+        description: '低分阈值'
+        required: false
+        default: '-5'
+      drop_columns:
+        description: 'rewrite_items 后是否顺带删除已清空的正文列: true / false'
+        required: false
+        default: 'false'
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: collector/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r collector/requirements.txt
+
+      - name: Run requested action
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENSEARCH_URL: ${{ secrets.OPENSEARCH_URL }}
+          ACTION: ${{ inputs.action }}
+          EVENT_DAYS: ${{ inputs.event_days || '90' }}
+          NON_VIDEO_DAYS: ${{ inputs.non_video_days || '7' }}
+          LOW_SCORE_VIDEO_DAYS: ${{ inputs.low_score_video_days || '7' }}
+          VIDEO_DAYS: ${{ inputs.video_days || '15' }}
+          PUBLIC_VIDEO_DAYS: ${{ inputs.public_video_days || '30' }}
+          HIGH_SCORE_VIDEO_DAYS: ${{ inputs.high_score_video_days || '45' }}
+          HIGH_SCORE_THRESHOLD: ${{ inputs.high_score_threshold || '20' }}
+          LOW_SCORE_THRESHOLD: ${{ inputs.low_score_threshold || '-5' }}
+          DROP_COLUMNS: ${{ inputs.drop_columns || 'false' }}
+        run: |
+          case "$ACTION" in
+            inspect)
+              python scripts/inspect_pg_usage.py
+              ;;
+            cleanup)
+              python scripts/cleanup_video_feed_data.py \
+                --apply \
+                --event-days "${EVENT_DAYS}" \
+                --non-video-days "${NON_VIDEO_DAYS}" \
+                --low-score-video-days "${LOW_SCORE_VIDEO_DAYS}" \
+                --video-days "${VIDEO_DAYS}" \
+                --public-video-days "${PUBLIC_VIDEO_DAYS}" \
+                --high-score-video-days "${HIGH_SCORE_VIDEO_DAYS}" \
+                --high-score-threshold "${HIGH_SCORE_THRESHOLD}" \
+                --low-score-threshold "${LOW_SCORE_THRESHOLD}"
+              python collector/twitter_monitor.py cleanup \
+                --retention-days "${VIDEO_DAYS}" \
+                --max-records "60000"
+              python scripts/inspect_pg_usage.py
+              ;;
+            rewrite_items)
+              args=(--apply)
+              if [[ "${DROP_COLUMNS}" == "true" ]]; then
+                args+=(--drop-columns)
+              fi
+              python scripts/rewrite_items_compact.py "${args[@]}"
+              python scripts/inspect_pg_usage.py
+              ;;
+            apply_schema)
+              python scripts/apply_schema.py
+              ;;
+            *)
+              echo "Unsupported action: $ACTION"
+              exit 1
+              ;;
+          esac

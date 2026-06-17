@@ -8,6 +8,7 @@ test("buildFeedXml creates RSS output", () => {
     {
       id: "item-1",
       target: "OpenAI",
+      targetLink: "https://x.com/openai",
       source: "twitter",
       kind: "user",
       category: null,
@@ -46,6 +47,7 @@ test("buildFeedXml includes image and video links in description", () => {
     {
       id: "item-2",
       target: "search:AI",
+      targetLink: null,
       source: "twitter",
       kind: "keyword",
       category: "tech",

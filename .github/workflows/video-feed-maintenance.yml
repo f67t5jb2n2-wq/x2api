@@ -9,10 +9,12 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  schedule:
-    - cron: '17 */6 * * *'
   workflow_dispatch:
     inputs:
+      shard_index:
+        description: '指定同步分片编号 0..N-1；留空表示运行全部分片'
+        required: false
+        default: ''
       tag_limit:
         description: '单次打标签扫描条数'
         required: false
@@ -53,12 +55,14 @@ jobs:
       - name: Build sync shard matrix
         id: matrix
         env:
+          INPUT_SHARD_INDEX: ${{ inputs.shard_index || '' }}
           INPUT_SHARD_COUNT: ${{ vars.OPENSEARCH_SYNC_SHARD_COUNT || '1' }}
         run: |
           python - <<'PY'
           import json
           import os
 
+          raw_index = (os.environ.get("INPUT_SHARD_INDEX") or "").strip().lower()
           raw_count = (os.environ.get("INPUT_SHARD_COUNT") or "1").strip()
           try:
               shard_count = int(raw_count)
@@ -68,7 +72,20 @@ jobs:
           if shard_count <= 0:
               shard_count = 1
 
-          matrix = {"shard": list(range(shard_count))}
+          if raw_index == "":
+              shards = list(range(shard_count))
+          else:
+              try:
+                  shard_index = int(raw_index)
+              except ValueError as exc:
+                  raise ValueError("shard_index must be blank or an integer.") from exc
+
+              if shard_index < 0 or shard_index >= shard_count:
+                  raise ValueError("shard_index must be between 0 and shard_count - 1.")
+
+              shards = [shard_index]
+
+          matrix = {"shard": shards}
           github_output = os.environ["GITHUB_OUTPUT"]
           with open(github_output, "a", encoding="utf-8") as fh:
               fh.write(f"shard_matrix={json.dumps(matrix)}\n")
@@ -121,28 +138,6 @@ jobs:
         run: |
           python collector/twitter_monitor.py seed-system-targets
 
-      - name: Sync OpenSearch items
-        if: vars.OPENSEARCH_SYNC_ENABLED == 'true'
-        timeout-minutes: 15
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          OPENSEARCH_URL: ${{ secrets.OPENSEARCH_URL }}
-          OPENSEARCH_SYNC_SHARD_INDEX: ${{ matrix.shard }}
-          OPENSEARCH_SYNC_SHARD_COUNT: ${{ needs.prepare.outputs.shard_count }}
-        run: |
-          python collector/sync_to_opensearch.py
-
-      - name: Sync OpenSearch stats
-        if: vars.OPENSEARCH_SYNC_ENABLED == 'true'
-        timeout-minutes: 10
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          OPENSEARCH_URL: ${{ secrets.OPENSEARCH_URL }}
-          OPENSEARCH_SYNC_SHARD_INDEX: ${{ matrix.shard }}
-          OPENSEARCH_SYNC_SHARD_COUNT: ${{ needs.prepare.outputs.shard_count }}
-        run: |
-          python collector/sync_to_opensearch.py --stats-only
-
       - name: Cleanup video feed data
         if: inputs.apply_cleanup != 'false'
         timeout-minutes: 10
@@ -166,17 +161,6 @@ jobs:
             --public-video-days "${PUBLIC_VIDEO_DAYS}" \
             --high-score-video-days "${HIGH_SCORE_VIDEO_DAYS}" \
             --high-score-threshold "${HIGH_SCORE_THRESHOLD}"
-
-      - name: Prune deleted OpenSearch docs
-        if: vars.OPENSEARCH_SYNC_ENABLED == 'true'
-        timeout-minutes: 10
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          OPENSEARCH_URL: ${{ secrets.OPENSEARCH_URL }}
-          OPENSEARCH_SYNC_SHARD_INDEX: ${{ matrix.shard }}
-          OPENSEARCH_SYNC_SHARD_COUNT: ${{ needs.prepare.outputs.shard_count }}
-        run: |
-          python collector/sync_to_opensearch.py --prune-deleted
 
       - name: Backfill video tags
         timeout-minutes: 10

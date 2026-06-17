@@ -6,7 +6,7 @@ import { cacheDeleteJson } from "@/lib/redis-cache";
 import { asRows } from "@/lib/sql-result";
 import { resolveAuthorPresentation, type AuthorPresentation } from "@/lib/author-presentation";
 import type { TargetSource } from "@/lib/targets";
-import { isOpenSearchFeedEnabled } from "@/lib/opensearch";
+import { getOpenSearchClient, getOpenSearchItemsIndex, isOpenSearchFeedEnabled } from "@/lib/opensearch";
 
 export type VideoFeedSource = "user" | "public" | "mixed";
 export const VIDEO_FEED_EVENT_TYPES = ["impression", "play", "finish", "like", "dislike", "skip", "share"] as const;
@@ -864,6 +864,92 @@ async function invalidateVideoFeedEventCaches(clientId: string) {
   ]);
 }
 
+async function updateOpenSearchVideoStats(itemId: string) {
+  if (!isOpenSearchFeedEnabled()) {
+    return;
+  }
+
+  const client = getOpenSearchClient();
+  if (!client) {
+    return;
+  }
+
+  const sql = getSql();
+  const rows = asRows<{
+    score: number;
+    impressions: number;
+    plays: number;
+    finishes: number;
+    likes: number;
+    dislikes: number;
+    skips: number;
+    shares: number;
+  }>(await sql`
+    SELECT
+      COALESCE(score, 0) AS score,
+      COALESCE(impressions, 0) AS impressions,
+      COALESCE(plays, 0) AS plays,
+      COALESCE(finishes, 0) AS finishes,
+      COALESCE(likes, 0) AS likes,
+      COALESCE(dislikes, 0) AS dislikes,
+      COALESCE(skips, 0) AS skips,
+      COALESCE(shares, 0) AS shares
+    FROM video_stats
+    WHERE item_id = ${itemId}
+    LIMIT 1
+  `);
+  const row = rows[0];
+  if (!row) {
+    return;
+  }
+
+  try {
+    const params = {
+      index: getOpenSearchItemsIndex(),
+      id: itemId,
+      body: {
+        doc: {
+          score: Number(row.score),
+          quality_score: Math.max(Number(row.score), 0),
+          impressions: Number(row.impressions),
+          plays: Number(row.plays),
+          finishes: Number(row.finishes),
+          likes: Number(row.likes),
+          dislikes: Number(row.dislikes),
+          skips: Number(row.skips),
+          shares: Number(row.shares),
+        },
+      },
+      retry_on_conflict: 3,
+    } as unknown as Parameters<typeof client.update>[0];
+    await client.update(params);
+  } catch (error) {
+    console.warn("[video-feed] Failed to update OpenSearch stats", error);
+  }
+}
+
+async function deleteOpenSearchVideoItem(itemId: string) {
+  if (!isOpenSearchFeedEnabled()) {
+    return;
+  }
+
+  const client = getOpenSearchClient();
+  if (!client) {
+    return;
+  }
+
+  try {
+    const params = {
+      index: getOpenSearchItemsIndex(),
+      id: itemId,
+      ignore: [404],
+    } as unknown as Parameters<typeof client.delete>[0];
+    await client.delete(params);
+  } catch (error) {
+    console.warn("[video-feed] Failed to delete OpenSearch item", error);
+  }
+}
+
 export async function recordVideoEvent(input: {
   clientId: string;
   itemId: string;
@@ -943,6 +1029,7 @@ export async function recordVideoEvent(input: {
       updated_at = NOW()
   `;
 
+  await updateOpenSearchVideoStats(input.itemId);
   await invalidateVideoFeedEventCaches(input.clientId);
 }
 
@@ -994,6 +1081,9 @@ export async function removeVideoFeedItemAfterPlaybackFailure(input: VideoPlayba
     RETURNING i.id
   `);
 
+  if (rows.length > 0) {
+    await deleteOpenSearchVideoItem(input.itemId);
+  }
   return { removed: rows.length > 0 };
 }
 

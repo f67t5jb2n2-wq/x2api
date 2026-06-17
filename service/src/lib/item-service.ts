@@ -1,4 +1,9 @@
 import { getSql } from "@/lib/db";
+import { isOpenSearchFeedEnabled } from "@/lib/opensearch";
+import {
+  listItemsByFeedTokenFromOpenSearch,
+  listItemsFromOpenSearch,
+} from "@/lib/opensearch-item-service";
 import { buildCursorPage, decodeCursor, normalizeLimit } from "@/lib/pagination";
 import { asRows } from "@/lib/sql-result";
 import { resolveAuthorPresentation, type AuthorPresentation } from "@/lib/author-presentation";
@@ -81,6 +86,14 @@ function isItemCursor(value: unknown): value is ItemCursor {
 }
 
 export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
+  if (isOpenSearchFeedEnabled()) {
+    try {
+      return await listItemsFromOpenSearch(query);
+    } catch (error) {
+      console.warn("[items] OpenSearch query failed, falling back to PostgreSQL", error);
+    }
+  }
+
   const sql = getSql();
   const limit = normalizeLimit(query.limit);
   const cursor = decodeCursor(query.cursor, isItemCursor);
@@ -332,6 +345,14 @@ export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
 }
 
 export async function listItemsByFeedToken(feedToken: string, limit = 50) {
+  if (isOpenSearchFeedEnabled()) {
+    try {
+      return await listItemsByFeedTokenFromOpenSearch({ feedToken, limit });
+    } catch (error) {
+      console.warn("[items:rss] OpenSearch query failed, falling back to PostgreSQL", error);
+    }
+  }
+
   const sql = getSql();
   const normalizedLimit = normalizeLimit(limit);
 

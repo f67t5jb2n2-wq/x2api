@@ -16,8 +16,8 @@
 1. GitHub Actions 按计划触发采集任务
 2. Python 采集器从数据库读取当前所有活跃订阅目标
 3. 采集器通过 Nitter/X 相关来源抓取指定用户或关键词内容
-4. 新内容写入 PostgreSQL
-5. Vercel 上的 Next.js 服务读取 PostgreSQL，对外提供 JSON API 与 RSS
+4. 新内容先写入 PostgreSQL，并在采集链路内实时补写到 OpenSearch
+5. Vercel 上的 Next.js 服务优先读取 OpenSearch，对外提供 JSON API 与 RSS；PostgreSQL 主要保留关系数据与轻量锚点
 6. 客户端使用 `apiKey` 管理订阅、查询数据
 7. RSS 使用 `feedToken` 生成专属订阅链接，供 RSS 阅读器或外部系统消费
 
@@ -33,6 +33,7 @@
   - 手动查询
   - 定时采集
   - 清理历史数据
+  - 采集完成后的 OpenSearch 实时补写与 PG 轻量压缩
 
 #### B. 服务模块 `service/`
 
@@ -56,9 +57,16 @@
 - `subscriptions`
   - 客户端与目标之间的订阅关系
 - `items`
-  - 抓取到的内容明细
+  - 抓取到的内容锚点、过期时间与必要索引字段
 - `crawl_state`
   - 每个目标的最近抓取状态
+
+OpenSearch 索引：
+
+- `x2_items`
+  - API、RSS、视频流的主查询索引
+- `x2_sync_meta`
+  - 兼容历史迁移与回补用的同步元数据
 
 #### D. 调度模块 `.github/workflows/`
 
@@ -180,6 +188,12 @@ search:黑料
 ```text
 https://x2api-service.vercel.app
 ```
+
+说明：
+
+- 稳态运行不再依赖 `collector/sync_to_opensearch.py` 作为常规维护步骤
+- 文档新增、视频统计更新、过期删除，都会在主业务链路内同步到 OpenSearch
+- PostgreSQL 中的 `items` 会逐步压缩掉大字段，以控制磁盘占用
 
 ### 5.2 内容类型
 

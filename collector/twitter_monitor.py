@@ -33,6 +33,26 @@ except ModuleNotFoundError:
     from redis_state import acquire_writer_locks
 
 try:
+    from collector.opensearch_items import sync_item as sync_item_to_opensearch
+except ModuleNotFoundError:
+    from opensearch_items import sync_item as sync_item_to_opensearch
+
+try:
+    from collector.opensearch_items import compact_item as compact_pg_item_after_sync
+    from collector.opensearch_items import delete_item as delete_opensearch_item
+    from collector.opensearch_items import get_client as get_opensearch_query_client
+    from collector.opensearch_items import get_items_index as get_opensearch_items_index
+    from collector.opensearch_items import is_item_compacted as is_pg_item_compacted
+    from collector.opensearch_items import sync_items as sync_items_to_opensearch
+except ModuleNotFoundError:
+    from opensearch_items import compact_item as compact_pg_item_after_sync
+    from opensearch_items import delete_item as delete_opensearch_item
+    from opensearch_items import get_client as get_opensearch_query_client
+    from opensearch_items import get_items_index as get_opensearch_items_index
+    from opensearch_items import is_item_compacted as is_pg_item_compacted
+    from opensearch_items import sync_items as sync_items_to_opensearch
+
+try:
     from collector.avgood_source import (
         AVGOOD_CRITICAL_WINDOW_MINUTES,
         AVGOOD_DEFAULT_BASE_URL,
@@ -2322,6 +2342,90 @@ def seed_system_targets(conn, target_configs: list[dict]) -> dict[str, int]:
     return {"upserted": upserted}
 
 
+def sync_source_items_to_opensearch(conn, source: str, *, updated_since: datetime | None = None, limit: int = 5000) -> dict[str, int]:
+    if not os.environ.get("OPENSEARCH_URL", "").strip():
+        return {"scanned": 0, "synced": 0}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT i.id::text AS id
+            FROM items i
+            INNER JOIN targets t ON t.id = i.target_id
+            WHERE t.source = %s
+              AND i.video_url IS NOT NULL
+              AND i.video_url <> ''
+              AND i.expires_at > NOW()
+              AND (%s::timestamptz IS NULL OR i.updated_at >= %s)
+            ORDER BY i.updated_at DESC, i.id DESC
+            LIMIT %s
+            """,
+            (source, updated_since, updated_since, max(1, limit)),
+        )
+        rows = cur.fetchall()
+
+    item_ids = [str(row["id"]) for row in rows]
+    synced = sync_items_to_opensearch(conn, item_ids)
+    return {"scanned": len(item_ids), "synced": synced}
+
+
+def compact_source_items(conn, source: str, *, older_than_hours: int = 2, limit: int = 1000) -> dict[str, int]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT i.id::text AS id, i.*
+            FROM items i
+            INNER JOIN targets t ON t.id = i.target_id
+            WHERE t.source = %s
+              AND i.video_url IS NOT NULL
+              AND i.video_url <> ''
+              AND i.expires_at > NOW()
+              AND i.updated_at < NOW() - (%s || ' hours')::interval
+            ORDER BY i.updated_at ASC, i.id ASC
+            LIMIT %s
+            """,
+            (source, max(1, older_than_hours), max(1, limit)),
+        )
+        rows = cur.fetchall()
+
+    compacted = 0
+    skipped = 0
+    for row in rows:
+        if is_pg_item_compacted(row):
+            skipped += 1
+            continue
+        try:
+            if compact_pg_item_after_sync(conn, str(row["id"])):
+                compacted += 1
+        except Exception as exc:
+            print(f"[opensearch] compact failed for {row['id']}: {exc}")
+    return {"scanned": len(rows), "compacted": compacted, "skipped": skipped}
+
+
+def finalize_monitor_source_run(
+    conn,
+    stats: dict,
+    *,
+    source: str | None = None,
+    compact_after_hours: int = 1,
+) -> dict:
+    conn.commit()
+    if not source:
+        return stats
+
+    os_sync_stats = sync_source_items_to_opensearch(conn, source)
+    if os_sync_stats["scanned"] > 0:
+        conn.commit()
+        stats = {**stats, "opensearchSync": os_sync_stats}
+
+    compact_stats = compact_source_items(conn, source, older_than_hours=compact_after_hours)
+    if compact_stats["scanned"] > 0:
+        conn.commit()
+        stats = {**stats, "pgCompaction": compact_stats}
+
+    return stats
+
+
 def load_system_targets(conn) -> list[dict]:
     with conn.cursor() as cur:
         cur.execute(
@@ -2440,6 +2544,7 @@ def insert_items(conn, target_row: dict, tweets: list[dict], previous_id: str | 
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (target_id, guid) DO NOTHING
+                RETURNING id
                 """,
                 (
                     target_row["id"],
@@ -2464,7 +2569,13 @@ def insert_items(conn, target_row: dict, tweets: list[dict], previous_id: str | 
                     Jsonb(metadata),
                 ),
             )
-            inserted += cur.rowcount
+            row = cur.fetchone()
+            if row and row.get("id"):
+                try:
+                    sync_item_to_opensearch(conn, str(row["id"]))
+                except Exception as exc:
+                    print(f"[opensearch] twitter item sync failed for {tweet.get('guid')}: {exc}")
+                inserted += 1
 
     return inserted
 
@@ -2951,7 +3062,12 @@ def upsert_resolved_youtube_item(conn, queue_row: dict, resolved: dict) -> str:
                 Jsonb(metadata),
             ),
         )
-        return str(cur.fetchone()["id"])
+        item_id = str(cur.fetchone()["id"])
+    try:
+        sync_item_to_opensearch(conn, item_id)
+    except Exception as exc:
+        print(f"[opensearch] youtube item sync failed for {payload.get('guid')}: {exc}")
+    return item_id
 
 
 def resolve_youtube_queue_row(conn, queue_row: dict) -> bool:
@@ -3493,7 +3609,7 @@ def upsert_heiliao_video_item(conn, target_row: dict, detail: dict, player: dict
                 video_url_expires_at = EXCLUDED.video_url_expires_at,
                 published_at = COALESCE(items.published_at, EXCLUDED.published_at),
                 metadata = items.metadata || EXCLUDED.metadata
-            RETURNING (xmax = 0) AS inserted
+            RETURNING id, (xmax = 0) AS inserted
             """,
             (
                 target_row["id"],
@@ -3517,6 +3633,11 @@ def upsert_heiliao_video_item(conn, target_row: dict, detail: dict, player: dict
             ),
         )
         row = cur.fetchone()
+    if row and row.get("id"):
+        try:
+            sync_item_to_opensearch(conn, str(row["id"]))
+        except Exception as exc:
+            print(f"[opensearch] heiliao item sync failed for {player.get('guid')}: {exc}")
     return bool(row and row.get("inserted"))
 
 
@@ -3924,7 +4045,7 @@ def upsert_cg91_video_item(conn, target_row: dict, detail: dict, player: dict, v
                 video_url_expires_at = EXCLUDED.video_url_expires_at,
                 published_at = COALESCE(items.published_at, EXCLUDED.published_at),
                 metadata = items.metadata || EXCLUDED.metadata
-            RETURNING (xmax = 0) AS inserted
+            RETURNING id, (xmax = 0) AS inserted
             """,
             (
                 target_row["id"],
@@ -3948,6 +4069,11 @@ def upsert_cg91_video_item(conn, target_row: dict, detail: dict, player: dict, v
             ),
         )
         row = cur.fetchone()
+    if row and row.get("id"):
+        try:
+            sync_item_to_opensearch(conn, str(row["id"]))
+        except Exception as exc:
+            print(f"[opensearch] cg91 item sync failed for {player.get('guid')}: {exc}")
     return bool(row and row.get("inserted"))
 
 
@@ -4068,6 +4194,10 @@ def refresh_cg91_playback_urls(conn, limit: int, refresh_window_minutes: int, cr
                 next_metadata = metadata | {"resolver": "cg91-dplayer", "resolved_at": now_iso(), "video_url_expires_at": verified["video_url_expires_at"].isoformat(), "date_modified": detail.get("modified_at").isoformat() if detail.get("modified_at") else metadata.get("date_modified")}
                 with conn.cursor() as cur:
                     cur.execute("""UPDATE items SET video_url = %s, video_url_expires_at = %s, metadata = %s, stored_at = stored_at WHERE id = %s""", (verified["video_url"], verified["video_url_expires_at"], Jsonb(next_metadata), row["id"]))
+                try:
+                    sync_item_to_opensearch(conn, str(row["id"]))
+                except Exception as exc:
+                    print(f"[opensearch] cg91 refresh sync failed for {row['guid']}: {exc}")
                 refreshed += 1
             except Exception as exc:
                 failed += 1
@@ -4077,6 +4207,7 @@ def refresh_cg91_playback_urls(conn, limit: int, refresh_window_minutes: int, cr
 
 
 def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, int]:
+    deleted_item_ids: list[str] = []
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) AS count FROM items")
         before_count = cur.fetchone()["count"]
@@ -4088,10 +4219,12 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
             DELETE FROM items i
             USING targets t
             WHERE t.id = i.target_id
-              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', 'badnews', '91porna', '91porn', '91rb', '18j', 'avgood', '705hs', 'xxxtik', 'affair', 'attach', 'dirtyship', 'influencersgonewild', 'missav')
+              AND t.source IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', '1mtif', 'tikporn', 'badnews', 'bdrq', '91porna', '91porn', '91rb', '18j', 'avgood', '705hs', 'xxxtik', 'affair', 'attach', 'dirtyship', 'influencersgonewild', 'missav')
               AND i.expires_at <= NOW()
+            RETURNING i.id::text AS id
             """
         )
+        deleted_item_ids.extend(str(row["id"]) for row in cur.fetchall())
         cur.execute(
             """
             DELETE FROM items i
@@ -4111,9 +4244,11 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
                 WHERE tp.target_id = i.target_id
                   AND tp.is_public_pool = TRUE
               )
+            RETURNING i.id::text AS id
             """,
             (threshold,),
         )
+        deleted_item_ids.extend(str(row["id"]) for row in cur.fetchall())
 
         if max_records > 0:
             cur.execute(
@@ -4142,9 +4277,11 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
                 )
                 DELETE FROM items
                 WHERE id IN (SELECT id FROM doomed)
+                RETURNING id::text AS id
                 """,
                 (max_records,),
             )
+            deleted_item_ids.extend(str(row["id"]) for row in cur.fetchall())
 
         cur.execute(
             """
@@ -4164,7 +4301,172 @@ def cleanup_records(conn, retention_days: int, max_records: int) -> dict[str, in
         cur.execute("SELECT COUNT(*) AS count FROM items")
         after_count = cur.fetchone()["count"]
 
-    return {"before": before_count, "after": after_count, "deleted": before_count - after_count}
+    for item_id in dict.fromkeys(deleted_item_ids):
+        try:
+            delete_opensearch_item(item_id)
+        except Exception as exc:
+            print(f"[opensearch] cleanup delete failed for {item_id}: {exc}")
+
+    return {"before": before_count, "after": after_count, "deleted": before_count - after_count, "osDeleted": len(set(deleted_item_ids))}
+
+
+def load_query_target_ids(conn, api_key: str) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT s.target_id::text AS target_id
+            FROM subscriptions s
+            INNER JOIN clients c ON c.id = s.client_id
+            WHERE c.api_key = %s
+              AND c.status = 'active'
+            """,
+            (api_key,),
+        )
+        rows = cur.fetchall()
+    return [str(row["target_id"]) for row in rows if row.get("target_id")]
+
+
+def build_opensearch_target_filter(target: str | None):
+    normalized_target = target.lower().strip() if target else None
+    if not normalized_target:
+        return None
+
+    clauses = [{"term": {"target": normalized_target}}]
+    source_key = normalized_presentation_source(normalized_target)
+    if source_key in {
+        HEILIAO_SOURCE,
+        CG91_SOURCE,
+        BAOLIAO51_SOURCE,
+        DOUYIN_SOURCE,
+        MH18_SOURCE,
+        ROU_SOURCE,
+        DADAAFA_SOURCE,
+        J18_SOURCE,
+        MTIF_SOURCE,
+        TIKPORN_SOURCE,
+        BADNEWS_SOURCE,
+        BDRQ_SOURCE,
+        PORNA91_SOURCE,
+        PORN91_SOURCE,
+        RB91_SOURCE,
+        AVGOOD_SOURCE,
+        HS705_SOURCE,
+        XXXTIK_SOURCE,
+        AFFAIR_SOURCE,
+        ATTACH_SOURCE,
+        DIRTYSHIP_SOURCE,
+        INFLUENCERSGONEWILD_SOURCE,
+        MISSAV_SOURCE,
+    }:
+        clauses.append({"term": {"source": source_key}})
+
+    if len(clauses) == 1:
+        return clauses[0]
+
+    return {"bool": {"should": clauses, "minimum_should_match": 1}}
+
+
+def query_records_from_opensearch(
+    conn,
+    *,
+    limit: int,
+    target: str | None,
+    keyword: str | None,
+    since: str | None,
+    until: str | None,
+    api_key: str | None,
+) -> list[dict]:
+    client = get_opensearch_query_client()
+    if client is None:
+        raise RuntimeError("OpenSearch is not configured.")
+
+    filters: list[dict] = []
+
+    if api_key:
+        target_ids = load_query_target_ids(conn, api_key)
+        if not target_ids:
+            return []
+        filters.append({"terms": {"target_id": target_ids}})
+
+    target_filter = build_opensearch_target_filter(target)
+    if target_filter:
+        filters.append(target_filter)
+
+    if since:
+        since_dt = parse_datetime(since)
+        if since_dt:
+            filters.append({"range": {"stored_at": {"gte": since_dt.isoformat()}}})
+
+    if until:
+        until_dt = parse_datetime(until)
+        if until_dt:
+            filters.append({"range": {"stored_at": {"lte": until_dt.isoformat()}}})
+
+    normalized_keyword = keyword.strip().lower() if keyword and keyword.strip() else None
+    if normalized_keyword:
+        wildcard_keyword = normalized_keyword.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+        filters.append(
+            {
+                "bool": {
+                    "should": [
+                        {"match_phrase": {"title": normalized_keyword}},
+                        {"match_phrase": {"content": normalized_keyword}},
+                        {"match_phrase": {"raw_content": normalized_keyword}},
+                        {"match_phrase": {"translated_content": normalized_keyword}},
+                        {"wildcard": {"title": {"value": f"*{wildcard_keyword}*"}}},
+                        {"wildcard": {"content": {"value": f"*{wildcard_keyword}*"}}},
+                        {"wildcard": {"raw_content": {"value": f"*{wildcard_keyword}*"}}},
+                        {"wildcard": {"translated_content": {"value": f"*{wildcard_keyword}*"}}},
+                        {"wildcard": {"author": {"value": f"*{wildcard_keyword}*"}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
+
+    response = client.search(
+        index=get_opensearch_items_index(),
+        body={
+            "size": max(1, limit),
+            "track_total_hits": False,
+            "query": {"bool": {"filter": filters}},
+            "sort": [
+                {"sort_at": {"order": "desc", "unmapped_type": "date"}},
+                {"stored_at": {"order": "desc", "unmapped_type": "date"}},
+                {"id": {"order": "desc"}},
+            ],
+        },
+    )
+
+    payload = response.get("body") if isinstance(response, dict) and "body" in response else response
+    hits = (((payload or {}).get("hits") or {}).get("hits") or [])
+    records: list[dict] = []
+    for hit in hits:
+        source = hit.get("_source") or {}
+        if not source:
+            continue
+        records.append(
+            {
+                "target": source.get("target"),
+                "author": source.get("author"),
+                "fullname": source.get("fullname"),
+                "guid": source.get("guid") or source.get("id"),
+                "title": source.get("title"),
+                "content": source.get("content"),
+                "raw_content": source.get("raw_content"),
+                "translated_content": source.get("translated_content"),
+                "link": source.get("link"),
+                "x_url": source.get("x_url"),
+                "images": [image for image in (source.get("images") or []) if isinstance(image, str)],
+                "video_url": source.get("video_url"),
+                "expires_at": source.get("expires_at"),
+                "video_url_expires_at": source.get("video_url_expires_at"),
+                "published_at": source.get("published_at"),
+                "stored_at": source.get("stored_at"),
+                "is_retweet": bool(source.get("is_retweet")),
+            }
+        )
+    return records
 
 
 def query_records(
@@ -4177,6 +4479,20 @@ def query_records(
     until: str | None,
     api_key: str | None,
 ) -> list[dict]:
+    if os.environ.get("OPENSEARCH_URL", "").strip():
+        try:
+            return query_records_from_opensearch(
+                conn,
+                limit=limit,
+                target=target,
+                keyword=keyword,
+                since=since,
+                until=until,
+                api_key=api_key,
+            )
+        except Exception as exc:
+            print(f"[opensearch] query fallback to PostgreSQL: {exc}")
+
     like_keyword = f"%{keyword.lower()}%" if keyword else None
     normalized_target = target.lower() if target else None
     since_dt = parse_datetime(since)
@@ -4578,7 +4894,7 @@ def upsert_douyin_video_item(conn, target_row: dict, item: dict, verified: dict,
                 video_url_expires_at = EXCLUDED.video_url_expires_at,
                 published_at = COALESCE(items.published_at, EXCLUDED.published_at),
                 metadata = items.metadata || EXCLUDED.metadata
-            RETURNING (xmax = 0) AS inserted
+            RETURNING id, (xmax = 0) AS inserted
             """,
             (
                 target_row["id"],
@@ -4602,6 +4918,11 @@ def upsert_douyin_video_item(conn, target_row: dict, item: dict, verified: dict,
             ),
         )
         row = cur.fetchone()
+    if row and row.get("id"):
+        try:
+            sync_item_to_opensearch(conn, str(row["id"]))
+        except Exception as exc:
+            print(f"[opensearch] douyin item sync failed for {item.get('guid')}: {exc}")
     return bool(row and row.get("inserted"))
 
 
@@ -4711,6 +5032,10 @@ def refresh_douyin_playback_urls(conn, limit: int, refresh_window_minutes: int, 
                 }
                 with conn.cursor() as cur:
                     cur.execute("""UPDATE items SET video_url = %s, video_url_expires_at = %s, metadata = %s, stored_at = stored_at WHERE id = %s""", (verified["video_url"], verified["video_url_expires_at"], Jsonb(next_metadata), row["id"]))
+                try:
+                    sync_item_to_opensearch(conn, str(row["id"]))
+                except Exception as exc:
+                    print(f"[opensearch] douyin refresh sync failed for {row['guid']}: {exc}")
                 refreshed += 1
             except Exception as exc:
                 failed += 1
@@ -4788,6 +5113,15 @@ def command_monitor(args) -> int:
 
         print(f"[系统] 本轮新增 {new_records} 条记录")
 
+        os_sync_stats = sync_source_items_to_opensearch(conn, "twitter")
+        if os_sync_stats["scanned"] > 0:
+            conn.commit()
+            print(f"[OpenSearch] twitter 增量补写 {os_sync_stats['synced']}/{os_sync_stats['scanned']}")
+        compact_stats = compact_source_items(conn, "twitter", older_than_hours=2)
+        if compact_stats["compacted"] > 0:
+            conn.commit()
+            print(f"[PG] twitter 轻量压缩 {compact_stats['compacted']} 条")
+
         if not args.skip_cleanup:
             stats = cleanup_records(conn, retention_days, max_records)
             conn.commit()
@@ -4838,6 +5172,14 @@ def command_monitor_youtube(args) -> int:
                 print(f"[{target}] YouTube 处理异常: {exc}")
 
         print(f"[YouTube] 本轮解析 {resolved_records} 条视频")
+        os_sync_stats = sync_source_items_to_opensearch(conn, "youtube")
+        if os_sync_stats["scanned"] > 0:
+            conn.commit()
+            print(f"[OpenSearch] youtube 增量补写 {os_sync_stats['synced']}/{os_sync_stats['scanned']}")
+        compact_stats = compact_source_items(conn, "youtube", older_than_hours=1)
+        if compact_stats["compacted"] > 0:
+            conn.commit()
+            print(f"[PG] youtube 轻量压缩 {compact_stats['compacted']} 条")
         if not args.skip_cleanup:
             stats = cleanup_records(conn, retention_days, max_records)
             conn.commit()
@@ -4980,7 +5322,7 @@ def command_monitor_heiliao(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=HEILIAO_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5017,7 +5359,7 @@ def command_monitor_cg91(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=CG91_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5049,7 +5391,7 @@ def command_monitor_baoliao51(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=BAOLIAO51_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5081,7 +5423,7 @@ def command_monitor_douyin(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=DOUYIN_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5113,7 +5455,7 @@ def command_monitor_18mh(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=MH18_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5145,7 +5487,7 @@ def command_monitor_rou(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=ROU_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5177,7 +5519,7 @@ def command_monitor_dadaafa(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=DADAAFA_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5209,7 +5551,7 @@ def command_monitor_18j(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=J18_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5241,7 +5583,7 @@ def command_monitor_1mtif(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=MTIF_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5273,7 +5615,7 @@ def command_monitor_91porna(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=PORNA91_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5305,7 +5647,7 @@ def command_monitor_91porn(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=PORN91_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5337,7 +5679,7 @@ def command_monitor_91rb(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=RB91_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5369,7 +5711,7 @@ def command_monitor_avgood(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=AVGOOD_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5401,7 +5743,7 @@ def command_monitor_705hs(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=HS705_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5433,7 +5775,7 @@ def command_monitor_xxxtik(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=XXXTIK_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5465,7 +5807,7 @@ def command_monitor_affair(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=AFFAIR_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5497,7 +5839,7 @@ def command_monitor_attach(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=ATTACH_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5529,7 +5871,7 @@ def command_monitor_dirtyship(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=DIRTYSHIP_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5561,7 +5903,7 @@ def command_monitor_influencersgonewild(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=INFLUENCERSGONEWILD_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5593,7 +5935,7 @@ def command_monitor_missav(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=MISSAV_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5625,7 +5967,7 @@ def command_monitor_badnews(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=BADNEWS_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5657,7 +5999,7 @@ def command_monitor_bdrq(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=BDRQ_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()
@@ -5689,7 +6031,7 @@ def command_monitor_tikporn(args) -> int:
         if args.dry_run:
             conn.rollback()
         else:
-            conn.commit()
+            stats = finalize_monitor_source_run(conn, stats, source=TIKPORN_SOURCE, compact_after_hours=1)
         if not args.skip_cleanup and not args.dry_run:
             cleanup_stats = cleanup_records(conn, max(1, (retention_hours + 23) // 24), max_records)
             conn.commit()

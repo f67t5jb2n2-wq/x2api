@@ -489,11 +489,17 @@ async function getOpenSearchVideoDocument(itemId: string) {
       index: getOpenSearchItemsIndex(),
       id: itemId,
     } as unknown as Parameters<typeof client.get>[0]);
-    const source = (response as { _source?: Record<string, unknown> })._source;
-    return source ?? null;
+    return getOpenSearchVideoDocumentLike(response);
   } catch {
     return null;
   }
+}
+
+function getOpenSearchVideoDocumentLike(response: unknown) {
+  const source =
+    (response as { _source?: Record<string, unknown> })._source ??
+    (response as { body?: { _source?: Record<string, unknown> } }).body?._source;
+  return source ?? null;
 }
 
 function isActiveVideoDocument(source: Record<string, unknown> | null) {
@@ -612,6 +618,10 @@ export function buildPlaybackFailureRemovalMetadata(input: {
     reportedAt: input.reportedAt ?? new Date().toISOString(),
   };
 }
+
+export const __testables = {
+  getOpenSearchVideoDocumentLike,
+};
 
 export async function removeVideoFeedItemAfterPlaybackFailure(input: VideoPlaybackFailureRemovalInput) {
   const source = await getOpenSearchVideoDocument(input.itemId);

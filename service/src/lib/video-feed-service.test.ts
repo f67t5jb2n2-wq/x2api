@@ -6,11 +6,12 @@ import {
   buildPlaybackFailureRemovalMetadata,
   buildVideoFeedNextCursorPayload,
   compactVideoFeedCursorSeenValues,
+  parseVideoEventType,
   mergeVideoFeedCandidatePools,
   normalizeVideoFeedKeyword,
-  parseVideoEventType,
   selectDiverseVideoItems,
   VIDEO_FEED_SEEN_EVENT_TYPES,
+  __testables,
 } from "@/lib/video-feed-service";
 
 type FeedCursor = {
@@ -336,5 +337,23 @@ test("buildPlaybackFailureRemovalMetadata records sanitized playback failure det
     retryCount: 1,
     watchMs: null,
     reportedAt: "2026-06-09T10:00:00.000Z",
+  });
+});
+
+test("getOpenSearchVideoDocumentLike reads _source from nested body responses", () => {
+  const source = __testables.getOpenSearchVideoDocumentLike({
+    body: {
+      _source: {
+        id: "item-1",
+        item_role: "video_variant",
+        video_url: "https://cdn.example.com/video.m3u8",
+      },
+    },
+  });
+
+  assert.deepEqual(source, {
+    id: "item-1",
+    item_role: "video_variant",
+    video_url: "https://cdn.example.com/video.m3u8",
   });
 });

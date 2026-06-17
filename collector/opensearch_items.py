@@ -156,6 +156,10 @@ def _compute_group_key(guid: str, metadata: dict | None) -> str:
     return guid
 
 
+def _entry_guid_for_group(group_key: str, metadata: dict | None) -> str:
+    return _normalize_variant_key((metadata or {}).get("entry_guid")) or f"{group_key}#entry"
+
+
 def _compute_target_display(source: str | None, kind: str | None, value: str | None):
     if source == "youtube":
         return f"youtube:{value}"
@@ -481,6 +485,43 @@ def update_item_playback(
     return _defer_or_run(conn, callback)
 
 
+def _update_parent_entry_playback(
+    conn: psycopg.Connection,
+    *,
+    item_id: str,
+    video_url: str | None,
+    video_url_expires_at,
+    playback_headers: dict | None = None,
+    cover_url: str | None = None,
+    video_key: str | None = None,
+) -> bool:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT parent_item_id::text AS parent_item_id
+            FROM items
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (item_id,),
+        )
+        row = cur.fetchone()
+
+    parent_item_id = row.get("parent_item_id") if row else None
+    if not parent_item_id:
+        return False
+
+    return update_item_playback(
+        str(parent_item_id),
+        video_url=video_url,
+        video_url_expires_at=video_url_expires_at,
+        video_key=video_key,
+        playback_headers=playback_headers,
+        cover_url=cover_url,
+        conn=conn,
+    )
+
+
 def update_item_document(
     item_id: str,
     *,
@@ -612,7 +653,7 @@ def upsert_item_record(
 
     parent_item_id: str | None = None
     if item_role == "video_variant":
-        entry_guid = _normalize_variant_key((metadata or {}).get("entry_guid")) or f"{group_key}#entry"
+        entry_guid = _entry_guid_for_group(group_key, metadata)
         entry_metadata = dict(metadata or {})
         entry_metadata["group_key"] = group_key
         entry_video_count = int(entry_metadata.get("video_count") or 1)
@@ -658,10 +699,10 @@ def upsert_item_record(
                 group_key=group_key,
                 variant_key=None,
                 variant_index=None,
-                video_key=None,
+                video_key=variant_key,
                 video_count=entry_video_count,
-                video_url=None,
-                playback_headers=None,
+                video_url=video_url,
+                playback_headers=playback_headers,
                 cover_url=cover_url,
                 title=title,
                 caption=caption,
@@ -789,7 +830,7 @@ def refresh_item_playback(
             (video_url, video_url_expires_at, Jsonb(metadata or {}), item_id),
         )
 
-    return update_item_playback(
+    updated = update_item_playback(
         item_id,
         video_url=video_url,
         video_url_expires_at=video_url_expires_at,
@@ -798,6 +839,18 @@ def refresh_item_playback(
         cover_url=cover_url,
         conn=conn,
     )
+
+    _update_parent_entry_playback(
+        conn,
+        item_id=item_id,
+        video_url=video_url,
+        video_url_expires_at=video_url_expires_at,
+        playback_headers=playback_headers,
+        cover_url=cover_url,
+        video_key=video_key,
+    )
+
+    return updated
 
 
 def delete_item(item_id: str, conn: psycopg.Connection | None = None) -> bool:

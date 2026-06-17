@@ -6,7 +6,12 @@ import { cacheDeleteJson } from "@/lib/redis-cache";
 import { asRows } from "@/lib/sql-result";
 import { resolveAuthorPresentation, type AuthorPresentation } from "@/lib/author-presentation";
 import type { TargetSource } from "@/lib/targets";
-import { getOpenSearchClient, getOpenSearchItemsIndex, isOpenSearchFeedEnabled } from "@/lib/opensearch";
+import {
+  assertOpenSearchFeedEnabled,
+  getOpenSearchClient,
+  getOpenSearchItemsIndex,
+  isOpenSearchFeedEnabled,
+} from "@/lib/opensearch";
 
 export type VideoFeedSource = "user" | "public" | "mixed";
 export const VIDEO_FEED_EVENT_TYPES = ["impression", "play", "finish", "like", "dislike", "skip", "share"] as const;
@@ -844,17 +849,10 @@ async function listVideoFeedFromPostgres(query: VideoFeedQuery) {
 }
 
 export async function listVideoFeed(query: VideoFeedQuery) {
-  if (!isOpenSearchFeedEnabled()) {
-    return listVideoFeedFromPostgres(query);
-  }
+  assertOpenSearchFeedEnabled("video-feed");
 
-  try {
-    const { listVideoFeedFromOpenSearch } = await import("@/lib/feed-engine");
-    return await listVideoFeedFromOpenSearch(query);
-  } catch (error) {
-    console.warn("[video-feed] OpenSearch feed failed, falling back to PostgreSQL", error);
-    return listVideoFeedFromPostgres(query);
-  }
+  const { listVideoFeedFromOpenSearch } = await import("@/lib/feed-engine");
+  return await listVideoFeedFromOpenSearch(query);
 }
 
 async function invalidateVideoFeedEventCaches(clientId: string) {

@@ -64,8 +64,8 @@ SELECT
   fe.event_type,
   fe.watch_ms,
   fe.created_at,
-  i.author,
-  i.fullname,
+  COALESCE(NULLIF(i.metadata->>'item_author', ''), i.author) AS author,
+  COALESCE(NULLIF(i.metadata->>'item_fullname', ''), i.fullname) AS fullname,
   t.source,
   CASE
     WHEN t.source = 'youtube' THEN 'youtube:' || t.value

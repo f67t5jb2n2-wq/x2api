@@ -149,10 +149,10 @@ def main() -> int:
                 """
                 SELECT
                   i.id,
-                  i.title,
-                  i.content,
-                  i.author,
-                  i.fullname,
+                  COALESCE(NULLIF(i.metadata->>'item_title', ''), i.title) AS title,
+                  COALESCE(NULLIF(i.metadata->>'item_content', ''), i.content) AS content,
+                  COALESCE(NULLIF(i.metadata->>'item_author', ''), i.author) AS author,
+                  COALESCE(NULLIF(i.metadata->>'item_fullname', ''), i.fullname) AS fullname,
                   t.kind,
                   t.value,
                   COALESCE(tp.tags, '[]'::jsonb) AS profile_tags,

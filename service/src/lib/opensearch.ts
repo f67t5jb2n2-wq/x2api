@@ -13,6 +13,16 @@ export function isOpenSearchFeedEnabled() {
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
+export function assertOpenSearchFeedEnabled(context: string) {
+  if (!isOpenSearchFeedEnabled()) {
+    throw new Error(`[${context}] OpenSearch feed is required but OPENSEARCH_FEED_ENABLED is not enabled.`);
+  }
+
+  if (!process.env.OPENSEARCH_URL?.trim()) {
+    throw new Error(`[${context}] OpenSearch feed is required but OPENSEARCH_URL is not configured.`);
+  }
+}
+
 export function getOpenSearchClient() {
   const node = process.env.OPENSEARCH_URL?.trim();
   if (!node) {

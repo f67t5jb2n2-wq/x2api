@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getOpenSearchItemsIndex, isOpenSearchFeedEnabled } from "@/lib/opensearch";
+import { assertOpenSearchFeedEnabled, getOpenSearchItemsIndex, isOpenSearchFeedEnabled } from "@/lib/opensearch";
 
 test("isOpenSearchFeedEnabled accepts explicit truthy values", () => {
   const previous = process.env.OPENSEARCH_FEED_ENABLED;
@@ -35,5 +35,49 @@ test("getOpenSearchItemsIndex defaults to x2_items", () => {
     delete process.env.OPENSEARCH_ITEMS_INDEX;
   } else {
     process.env.OPENSEARCH_ITEMS_INDEX = previous;
+  }
+});
+
+test("assertOpenSearchFeedEnabled throws when feed flag is disabled", () => {
+  const previousEnabled = process.env.OPENSEARCH_FEED_ENABLED;
+  const previousUrl = process.env.OPENSEARCH_URL;
+
+  process.env.OPENSEARCH_FEED_ENABLED = "false";
+  process.env.OPENSEARCH_URL = "https://example.com";
+
+  assert.throws(() => assertOpenSearchFeedEnabled("items"), /OPENSEARCH_FEED_ENABLED/);
+
+  if (previousEnabled === undefined) {
+    delete process.env.OPENSEARCH_FEED_ENABLED;
+  } else {
+    process.env.OPENSEARCH_FEED_ENABLED = previousEnabled;
+  }
+
+  if (previousUrl === undefined) {
+    delete process.env.OPENSEARCH_URL;
+  } else {
+    process.env.OPENSEARCH_URL = previousUrl;
+  }
+});
+
+test("assertOpenSearchFeedEnabled throws when OpenSearch URL is missing", () => {
+  const previousEnabled = process.env.OPENSEARCH_FEED_ENABLED;
+  const previousUrl = process.env.OPENSEARCH_URL;
+
+  process.env.OPENSEARCH_FEED_ENABLED = "true";
+  delete process.env.OPENSEARCH_URL;
+
+  assert.throws(() => assertOpenSearchFeedEnabled("items"), /OPENSEARCH_URL/);
+
+  if (previousEnabled === undefined) {
+    delete process.env.OPENSEARCH_FEED_ENABLED;
+  } else {
+    process.env.OPENSEARCH_FEED_ENABLED = previousEnabled;
+  }
+
+  if (previousUrl === undefined) {
+    delete process.env.OPENSEARCH_URL;
+  } else {
+    process.env.OPENSEARCH_URL = previousUrl;
   }
 });

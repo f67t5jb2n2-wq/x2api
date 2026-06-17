@@ -80,6 +80,26 @@ def ensure_updated_at(conn: psycopg.Connection) -> None:
         )
         cur.execute("ALTER TABLE items ALTER COLUMN updated_at SET DEFAULT NOW()")
         cur.execute("ALTER TABLE items ALTER COLUMN updated_at SET NOT NULL")
+        cur.execute(
+            """
+            CREATE OR REPLACE FUNCTION set_updated_at()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = NOW();
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cur.execute("DROP TRIGGER IF EXISTS set_items_updated_at ON items")
+        cur.execute(
+            """
+            CREATE TRIGGER set_items_updated_at
+            BEFORE UPDATE ON items
+            FOR EACH ROW
+            EXECUTE FUNCTION set_updated_at()
+            """
+        )
 
 
 def drop_target_columns(conn: psycopg.Connection) -> list[str]:

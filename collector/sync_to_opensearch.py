@@ -320,6 +320,27 @@ def merge_tags(item_tags_array, profile_tags_jsonb):
     return sorted(tags) if tags else []
 
 
+def metadata_text(metadata, key: str, fallback):
+    value = metadata.get(key)
+    if isinstance(value, str):
+        value = value.strip()
+    return value if value not in (None, "") else fallback
+
+
+def metadata_array(metadata, key: str, fallback):
+    value = metadata.get(key)
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            return parsed
+    return fallback
+
+
 # ---------------------------------------------------------------------------
 # Helper: build OpenSearch document from a PG row
 # ---------------------------------------------------------------------------
@@ -360,19 +381,19 @@ def build_document(row):
         "video_key": compute_video_key(row),
         "playback_headers": playback_headers,
         "cover_url": row["cover_url"],
-        "title": row["title"],
-        "caption": row["caption"],
-        "content": row["content"],
+        "title": metadata_text(metadata, "item_title", row["title"]),
+        "caption": metadata_text(metadata, "item_content", row["caption"]),
+        "content": metadata_text(metadata, "item_content", row["content"]),
         "raw_content": row.get("raw_content"),
         "translated_content": row.get("translated_content"),
-        "author": row["author"],
-        "fullname": row["fullname"],
-        "display_author": row["display_author"],
-        "display_handle": row["display_handle"],
-        "author_profile_url": row["author_profile_url"],
-        "author_profile_platform": row["author_profile_platform"],
-        "x_url": row["x_url"],
-        "link": row["link"],
+        "author": metadata_text(metadata, "item_author", row["author"]),
+        "fullname": metadata_text(metadata, "item_fullname", row["fullname"]),
+        "display_author": metadata_text(metadata, "item_display_author", row["display_author"]),
+        "display_handle": metadata_text(metadata, "item_display_handle", row["display_handle"]),
+        "author_profile_url": metadata_text(metadata, "item_author_profile_url", row["author_profile_url"]),
+        "author_profile_platform": metadata_text(metadata, "item_author_profile_platform", row["author_profile_platform"]),
+        "x_url": metadata_text(metadata, "item_x_url", row["x_url"]),
+        "link": metadata_text(metadata, "item_link", row["link"]),
         "published_at": dt_to_iso(row["published_at"]),
         "stored_at": dt_to_iso(row["stored_at"]),
         "updated_at": dt_to_iso(row["updated_at"]),
@@ -398,7 +419,7 @@ def build_document(row):
         "dislikes": int(row["dislikes"]),
         "skips": int(row["skips"]),
         "shares": int(row["shares"]),
-        "images": images_list,
+        "images": metadata_array(metadata, "item_images", images_list),
     }
     return doc
 
@@ -421,9 +442,24 @@ def create_os_client(opensearch_url: str) -> OpenSearch:
         use_ssl=(scheme == "https"),
         verify_certs=False,
         ssl_show_warn=False,
-        timeout=60,
+        timeout=180,
     )
     return client
+
+
+def bulk_with_retry(client: OpenSearch, actions: list[dict], *, retries: int = 3, retry_delay_seconds: float = 2.0):
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            return helpers.bulk(client, actions, raise_on_error=False)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= retries:
+                raise
+            delay = retry_delay_seconds * attempt
+            print(f"  Bulk request failed on attempt {attempt}/{retries}: {exc}. Retrying in {delay:.1f}s...")
+            time.sleep(delay)
+    raise last_error  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -511,20 +547,20 @@ SELECT
   i.video_url,
   i.metadata,
   CASE WHEN jsonb_typeof(i.metadata->'playback_headers') = 'object' THEN i.metadata->'playback_headers' ELSE NULL END as playback_headers,
-  COALESCE(i.metadata->>'video_poster_url', i.images->>0) as cover_url,
-  i.title,
-  COALESCE(i.content, i.title) as caption,
-  i.content,
+  COALESCE(i.metadata->>'video_poster_url', i.metadata->'item_images'->>0, i.images->>0) as cover_url,
+  COALESCE(NULLIF(i.metadata->>'item_title', ''), i.title) as title,
+  COALESCE(NULLIF(i.metadata->>'item_content', ''), i.content, NULLIF(i.metadata->>'item_title', ''), i.title) as caption,
+  COALESCE(NULLIF(i.metadata->>'item_content', ''), i.content) as content,
   NULL::text as raw_content,
   NULL::text as translated_content,
-  i.author,
-  i.fullname,
-  i.display_author,
-  i.display_handle,
-  i.author_profile_url,
-  i.author_profile_platform,
-  i.x_url,
-  i.link,
+  COALESCE(NULLIF(i.metadata->>'item_author', ''), i.author) as author,
+  COALESCE(NULLIF(i.metadata->>'item_fullname', ''), i.fullname) as fullname,
+  COALESCE(NULLIF(i.metadata->>'item_display_author', ''), i.display_author) as display_author,
+  COALESCE(NULLIF(i.metadata->>'item_display_handle', ''), i.display_handle) as display_handle,
+  COALESCE(NULLIF(i.metadata->>'item_author_profile_url', ''), i.author_profile_url) as author_profile_url,
+  COALESCE(NULLIF(i.metadata->>'item_author_profile_platform', ''), i.author_profile_platform) as author_profile_platform,
+  COALESCE(NULLIF(i.metadata->>'item_x_url', ''), i.x_url) as x_url,
+  COALESCE(NULLIF(i.metadata->>'item_link', ''), i.link) as link,
   i.published_at,
   i.stored_at,
   i.updated_at,
@@ -534,7 +570,7 @@ SELECT
   tp.category,
   COALESCE(tp.is_public_pool, FALSE) as is_public_pool,
   COALESCE(cat.is_sensitive, FALSE) as is_sensitive,
-  i.images,
+  COALESCE(i.metadata->'item_images', i.images) as images,
   i.expires_at,
   i.video_url_expires_at,
   i.is_retweet,
@@ -559,9 +595,7 @@ JOIN targets t ON t.id = i.target_id
 LEFT JOIN target_profiles tp ON tp.target_id = t.id
 LEFT JOIN categories cat ON cat.slug = tp.category
 LEFT JOIN video_stats vs ON vs.item_id = i.id
-WHERE i.video_url IS NOT NULL
-  AND i.video_url <> ''
-  AND i.expires_at > NOW()
+WHERE i.expires_at > NOW()
   AND (
     t.source NOT IN ('youtube', 'heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', '18j', '1mtif', 'tikporn', '91porna', '91porn', '91rb', 'badnews', 'bdrq', 'avgood', '705hs', 'xxxtik', 'affair', 'attach', 'dirtyship', 'influencersgonewild', 'missav')
     OR i.video_url_expires_at > NOW() + INTERVAL '10 minutes'
@@ -624,50 +658,62 @@ def sync_items(os_client: OpenSearch, db_url: str, full: bool, limit: int | None
         print(f"ERROR: Cannot connect to PostgreSQL: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params or None)
-            rows = cur.fetchall()
-
-    query_time = time.time() - t0
-    print(f"Fetched {len(rows)} rows from PG in {query_time:.1f}s")
-
-    if not rows:
-        print("Nothing to sync.")
-        return
-
-    # Build actions for bulk indexing
+    # Stream rows from PostgreSQL in server-side batches so full syncs do not
+    # materialize the entire active items set in memory.
     total_synced = 0
     total_errors = 0
     last_updated_at = None
     last_item_id = None
-    batch_size = 500
+    batch_size = 200
     t_sync = time.time()
+    total_rows = 0
+    batch_number = 0
 
-    for batch_start in range(0, len(rows), batch_size):
-        batch = rows[batch_start : batch_start + batch_size]
-        actions = []
-        for row in batch:
-            doc = build_document(row)
-            actions.append({
-                "_op_type": "index",
-                "_index": X2_ITEMS_INDEX,
-                "_id": str(row["id"]),
-                "_source": doc,
-            })
-            if row["updated_at"]:
-                last_updated_at = row["updated_at"]
-                last_item_id = str(row["id"])
+    with conn:
+        with conn.cursor(name=f"os_sync_items_{shard_index}_{shard_count}", row_factory=dict_row) as cur:
+            cur.itersize = batch_size
+            cur.execute(sql, params or None)
 
-        success, errors = helpers.bulk(os_client, actions, raise_on_error=False)
-        total_synced += success
-        total_errors += len(errors)
-        if errors:
-            print(f"  Batch {batch_start // batch_size + 1}: {success} ok, {len(errors)} errors")
-            for err in errors[:5]:
-                print(f"    {err}")
-        else:
-            print(f"  Batch {batch_start // batch_size + 1}: {success} indexed")
+            while True:
+                batch = cur.fetchmany(batch_size)
+                if not batch:
+                    break
+
+                if total_rows == 0:
+                    query_time = time.time() - t0
+                    print(f"Fetched first batch from PG in {query_time:.1f}s")
+
+                total_rows += len(batch)
+                batch_number += 1
+                actions = []
+                for row in batch:
+                    doc = build_document(row)
+                    actions.append({
+                        "_op_type": "index",
+                        "_index": X2_ITEMS_INDEX,
+                        "_id": str(row["id"]),
+                        "_source": doc,
+                    })
+                    if row["updated_at"]:
+                        last_updated_at = row["updated_at"]
+                        last_item_id = str(row["id"])
+
+                success, errors = bulk_with_retry(os_client, actions)
+                total_synced += success
+                total_errors += len(errors)
+                if errors:
+                    print(f"  Batch {batch_number}: {success} ok, {len(errors)} errors")
+                    for err in errors[:5]:
+                        print(f"    {err}")
+                else:
+                    print(f"  Batch {batch_number}: {success} indexed")
+
+    total_fetch_time = time.time() - t0
+    print(f"Scanned {total_rows} rows from PG in {total_fetch_time:.1f}s")
+
+    if total_rows == 0:
+        print("Nothing to sync.")
+        return
 
     sync_time = time.time() - t_sync
 
@@ -729,7 +775,7 @@ def sync_stats(os_client: OpenSearch, db_url: str, limit: int | None, shard_inde
 
     total_updated = 0
     total_errors = 0
-    batch_size = 500
+    batch_size = 200
     t_sync = time.time()
     last_updated_at = None
     last_item_id = None
@@ -758,7 +804,7 @@ def sync_stats(os_client: OpenSearch, db_url: str, limit: int | None, shard_inde
                 last_updated_at = row["updated_at"]
                 last_item_id = str(row["id"])
 
-        success, errors = helpers.bulk(os_client, actions, raise_on_error=False)
+        success, errors = bulk_with_retry(os_client, actions)
         total_updated += success
         total_errors += len(errors)
         if errors:
@@ -820,7 +866,7 @@ def prune_deleted(os_client: OpenSearch, db_url: str, limit: int | None, shard_i
             }
             for item_id in missing
         ]
-        success, errors = helpers.bulk(os_client, actions, raise_on_error=False)
+        success, errors = bulk_with_retry(os_client, actions)
         if errors:
             print(f"  Prune batch: {success} deleted, {len(errors)} errors")
             for err in errors[:5]:

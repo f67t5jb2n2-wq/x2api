@@ -1,5 +1,5 @@
 import { getSql } from "@/lib/db";
-import { isOpenSearchFeedEnabled } from "@/lib/opensearch";
+import { assertOpenSearchFeedEnabled, isOpenSearchFeedEnabled } from "@/lib/opensearch";
 import {
   listItemsByFeedTokenFromOpenSearch,
   listItemsFromOpenSearch,
@@ -87,12 +87,10 @@ function isItemCursor(value: unknown): value is ItemCursor {
 
 export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
   if (isOpenSearchFeedEnabled()) {
-    try {
-      return await listItemsFromOpenSearch(query);
-    } catch (error) {
-      console.warn("[items] OpenSearch query failed, falling back to PostgreSQL", error);
-    }
+    return await listItemsFromOpenSearch(query);
   }
+
+  assertOpenSearchFeedEnabled("items");
 
   const sql = getSql();
   const limit = normalizeLimit(query.limit);
@@ -344,12 +342,10 @@ export async function listItems(query: ItemQuery): Promise<ListItemsResult> {
 
 export async function listItemsByFeedToken(feedToken: string, limit = 50) {
   if (isOpenSearchFeedEnabled()) {
-    try {
-      return await listItemsByFeedTokenFromOpenSearch({ feedToken, limit });
-    } catch (error) {
-      console.warn("[items:rss] OpenSearch query failed, falling back to PostgreSQL", error);
-    }
+    return await listItemsByFeedTokenFromOpenSearch({ feedToken, limit });
   }
+
+  assertOpenSearchFeedEnabled("items:rss");
 
   const sql = getSql();
   const normalizedLimit = normalizeLimit(limit);

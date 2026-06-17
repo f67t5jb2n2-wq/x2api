@@ -43,14 +43,12 @@ try:
     from collector.opensearch_items import get_client as get_opensearch_query_client
     from collector.opensearch_items import get_items_index as get_opensearch_items_index
     from collector.opensearch_items import is_item_compacted as is_pg_item_compacted
-    from collector.opensearch_items import sync_items as sync_items_to_opensearch
 except ModuleNotFoundError:
     from opensearch_items import compact_item as compact_pg_item_after_sync
     from opensearch_items import delete_item as delete_opensearch_item
     from opensearch_items import get_client as get_opensearch_query_client
     from opensearch_items import get_items_index as get_opensearch_items_index
     from opensearch_items import is_item_compacted as is_pg_item_compacted
-    from opensearch_items import sync_items as sync_items_to_opensearch
 
 try:
     from collector.avgood_source import (
@@ -2342,33 +2340,6 @@ def seed_system_targets(conn, target_configs: list[dict]) -> dict[str, int]:
     return {"upserted": upserted}
 
 
-def sync_source_items_to_opensearch(conn, source: str, *, updated_since: datetime | None = None, limit: int = 5000) -> dict[str, int]:
-    if not os.environ.get("OPENSEARCH_URL", "").strip():
-        return {"scanned": 0, "synced": 0}
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT i.id::text AS id
-            FROM items i
-            INNER JOIN targets t ON t.id = i.target_id
-            WHERE t.source = %s
-              AND i.video_url IS NOT NULL
-              AND i.video_url <> ''
-              AND i.expires_at > NOW()
-              AND (%s::timestamptz IS NULL OR i.updated_at >= %s)
-            ORDER BY i.updated_at DESC, i.id DESC
-            LIMIT %s
-            """,
-            (source, updated_since, updated_since, max(1, limit)),
-        )
-        rows = cur.fetchall()
-
-    item_ids = [str(row["id"]) for row in rows]
-    synced = sync_items_to_opensearch(conn, item_ids)
-    return {"scanned": len(item_ids), "synced": synced}
-
-
 def compact_source_items(conn, source: str, *, older_than_hours: int = 2, limit: int = 1000) -> dict[str, int]:
     with conn.cursor() as cur:
         cur.execute(
@@ -2377,8 +2348,6 @@ def compact_source_items(conn, source: str, *, older_than_hours: int = 2, limit:
             FROM items i
             INNER JOIN targets t ON t.id = i.target_id
             WHERE t.source = %s
-              AND i.video_url IS NOT NULL
-              AND i.video_url <> ''
               AND i.expires_at > NOW()
               AND i.updated_at < NOW() - (%s || ' hours')::interval
             ORDER BY i.updated_at ASC, i.id ASC
@@ -2412,11 +2381,6 @@ def finalize_monitor_source_run(
     conn.commit()
     if not source:
         return stats
-
-    os_sync_stats = sync_source_items_to_opensearch(conn, source)
-    if os_sync_stats["scanned"] > 0:
-        conn.commit()
-        stats = {**stats, "opensearchSync": os_sync_stats}
 
     compact_stats = compact_source_items(conn, source, older_than_hours=compact_after_hours)
     if compact_stats["scanned"] > 0:
@@ -3025,7 +2989,7 @@ def upsert_resolved_youtube_item(conn, queue_row: dict, resolved: dict) -> str:
                 link, x_url, images, video_url, expires_at, video_url_expires_at,
                 published_at, stored_at, is_retweet, metadata
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, NOW(), FALSE, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, NOW(), FALSE, %s)
             ON CONFLICT (target_id, guid) DO UPDATE SET
                 display_author = EXCLUDED.display_author,
                 display_handle = EXCLUDED.display_handle,
@@ -3588,7 +3552,7 @@ def upsert_heiliao_video_item(conn, target_row: dict, detail: dict, player: dict
                 link, x_url, images, video_url, expires_at, video_url_expires_at,
                 published_at, stored_at, is_retweet, metadata
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, NOW(), FALSE, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, NOW(), FALSE, %s)
             ON CONFLICT (target_id, guid) DO UPDATE SET
                 display_author = EXCLUDED.display_author,
                 display_handle = EXCLUDED.display_handle,
@@ -3615,7 +3579,6 @@ def upsert_heiliao_video_item(conn, target_row: dict, detail: dict, player: dict
                 presentation["author_profile_platform"],
                 player.get("video_title") or detail.get("title"),
                 content,
-                detail.get("title"),
                 detail["url"],
                 Jsonb(images),
                 verified["video_url"],
@@ -4023,7 +3986,7 @@ def upsert_cg91_video_item(conn, target_row: dict, detail: dict, player: dict, v
                 link, x_url, images, video_url, expires_at, video_url_expires_at,
                 published_at, stored_at, is_retweet, metadata
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, NOW(), FALSE, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, NOW(), FALSE, %s)
             ON CONFLICT (target_id, guid) DO UPDATE SET
                 display_author = EXCLUDED.display_author,
                 display_handle = EXCLUDED.display_handle,
@@ -4050,7 +4013,6 @@ def upsert_cg91_video_item(conn, target_row: dict, detail: dict, player: dict, v
                 presentation["author_profile_platform"],
                 player.get("video_title") or detail.get("title"),
                 content,
-                detail.get("title"),
                 detail["url"],
                 Jsonb(images),
                 verified["video_url"],
@@ -4470,18 +4432,15 @@ def query_records(
     api_key: str | None,
 ) -> list[dict]:
     if os.environ.get("OPENSEARCH_URL", "").strip():
-        try:
-            return query_records_from_opensearch(
-                conn,
-                limit=limit,
-                target=target,
-                keyword=keyword,
-                since=since,
-                until=until,
-                api_key=api_key,
-            )
-        except Exception as exc:
-            print(f"[opensearch] query fallback to PostgreSQL: {exc}")
+        return query_records_from_opensearch(
+            conn,
+            limit=limit,
+            target=target,
+            keyword=keyword,
+            since=since,
+            until=until,
+            api_key=api_key,
+        )
 
     like_keyword = f"%{keyword.lower()}%" if keyword else None
     normalized_target = target.lower() if target else None
@@ -4859,7 +4818,7 @@ def upsert_douyin_video_item(conn, target_row: dict, item: dict, verified: dict,
                 link, x_url, images, video_url, expires_at, video_url_expires_at,
                 published_at, stored_at, is_retweet, metadata
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, NOW(), FALSE, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, NOW(), FALSE, %s)
             ON CONFLICT (target_id, guid) DO UPDATE SET
                 display_author = EXCLUDED.display_author,
                 display_handle = EXCLUDED.display_handle,
@@ -4886,7 +4845,6 @@ def upsert_douyin_video_item(conn, target_row: dict, item: dict, verified: dict,
                 presentation["author_profile_platform"],
                 item.get("title"),
                 content,
-                item.get("title"),
                 item["source_url"],
                 Jsonb(images),
                 verified["video_url"],
@@ -5092,10 +5050,6 @@ def command_monitor(args) -> int:
 
         print(f"[系统] 本轮新增 {new_records} 条记录")
 
-        os_sync_stats = sync_source_items_to_opensearch(conn, "twitter")
-        if os_sync_stats["scanned"] > 0:
-            conn.commit()
-            print(f"[OpenSearch] twitter 增量补写 {os_sync_stats['synced']}/{os_sync_stats['scanned']}")
         compact_stats = compact_source_items(conn, "twitter", older_than_hours=2)
         if compact_stats["compacted"] > 0:
             conn.commit()
@@ -5151,10 +5105,6 @@ def command_monitor_youtube(args) -> int:
                 print(f"[{target}] YouTube 处理异常: {exc}")
 
         print(f"[YouTube] 本轮解析 {resolved_records} 条视频")
-        os_sync_stats = sync_source_items_to_opensearch(conn, "youtube")
-        if os_sync_stats["scanned"] > 0:
-            conn.commit()
-            print(f"[OpenSearch] youtube 增量补写 {os_sync_stats['synced']}/{os_sync_stats['scanned']}")
         compact_stats = compact_source_items(conn, "youtube", older_than_hours=1)
         if compact_stats["compacted"] > 0:
             conn.commit()

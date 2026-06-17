@@ -14,6 +14,11 @@ from bs4 import BeautifulSoup
 from Crypto.Cipher import AES
 from psycopg.types.json import Jsonb
 
+try:
+    from collector.opensearch_items import sync_item as sync_item_to_opensearch
+except ModuleNotFoundError:
+    from opensearch_items import sync_item as sync_item_to_opensearch
+
 
 PORNA91_SITE_NAME = "91porna"
 PORNA91_SOURCE = "91porna"
@@ -737,7 +742,7 @@ def upsert_video_item(conn, target_row: dict, detail: dict, player: dict, verifi
                 link, x_url, images, video_url, expires_at, video_url_expires_at,
                 published_at, stored_at, is_retweet, metadata
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, NOW(), FALSE, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, NOW(), FALSE, %s)
             ON CONFLICT (target_id, guid) DO UPDATE SET
                 display_author = EXCLUDED.display_author,
                 display_handle = EXCLUDED.display_handle,
@@ -751,7 +756,7 @@ def upsert_video_item(conn, target_row: dict, detail: dict, player: dict, verifi
                 video_url_expires_at = EXCLUDED.video_url_expires_at,
                 published_at = COALESCE(items.published_at, EXCLUDED.published_at),
                 metadata = items.metadata || EXCLUDED.metadata
-            RETURNING (xmax = 0) AS inserted
+            RETURNING id, (xmax = 0) AS inserted
             """,
             (
                 target_row["id"],
@@ -774,6 +779,11 @@ def upsert_video_item(conn, target_row: dict, detail: dict, player: dict, verifi
             ),
         )
         row = cur.fetchone()
+    if row and row.get("id"):
+        try:
+            sync_item_to_opensearch(conn, str(row["id"]))
+        except Exception as exc:
+            print(f"[opensearch] 91porna item sync failed for {player['guid']}: {exc}")
     return bool(row and row.get("inserted"))
 
 
@@ -908,6 +918,10 @@ def refresh_playback_urls(conn, limit: int, refresh_window_minutes: int, critica
                 }
                 with conn.cursor() as cur:
                     cur.execute("""UPDATE items SET video_url = %s, video_url_expires_at = %s, metadata = %s, stored_at = stored_at WHERE id = %s""", (verified["video_url"], verified["video_url_expires_at"], Jsonb(next_metadata), row["id"]))
+                try:
+                    sync_item_to_opensearch(conn, str(row["id"]))
+                except Exception as exc:
+                    print(f"[opensearch] porna91 refresh sync failed for {row['guid']}: {exc}")
                 refreshed += 1
             except Exception as exc:
                 failed += 1

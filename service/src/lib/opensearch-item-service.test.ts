@@ -48,6 +48,7 @@ test("toRow maps OpenSearch docs into item records", () => {
 test("buildItemsQuery uses search_after when cursor is present", () => {
   const query = __testables.buildItemsQuery({
     targetIds: ["target-1"],
+    publicTargetIds: ["target-public"],
     size: 25,
     keyword: "alice",
     targetFilter: "twitter",
@@ -73,6 +74,7 @@ test("buildItemsQuery uses search_after when cursor is present", () => {
 test("buildItemsQuery filters public pool when sourceScope=public", () => {
   const query = __testables.buildItemsQuery({
     targetIds: ["target-1"],
+    publicTargetIds: ["target-public"],
     size: 10,
     keyword: null,
     targetFilter: null,
@@ -86,6 +88,27 @@ test("buildItemsQuery filters public pool when sourceScope=public", () => {
   assert.deepEqual(query.query.bool.filter.slice(0, 3), [
     { range: { expires_at: { gt: "now" } } },
     { term: { item_role: "entry" } },
-    { term: { is_public_pool: true } },
+    { terms: { target_id: ["target-public"] } },
+  ]);
+});
+
+test("buildItemsQuery merges subscriptions with item public pool when sourceScope=all", () => {
+  const query = __testables.buildItemsQuery({
+    targetIds: ["target-1"],
+    publicTargetIds: ["target-public"],
+    size: 10,
+    keyword: null,
+    targetFilter: null,
+    tagFilters: [],
+    categoryFilters: [],
+    sinceFilter: null,
+    sourceScope: "all",
+    cursor: null,
+  }) as { query: { bool: { filter: unknown[] } } };
+
+  assert.deepEqual(query.query.bool.filter.slice(0, 3), [
+    { range: { expires_at: { gt: "now" } } },
+    { term: { item_role: "entry" } },
+    { bool: { filter: [{ terms: { target_id: ["target-1", "target-public"] } }] } },
   ]);
 });

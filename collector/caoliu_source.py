@@ -407,17 +407,18 @@ def ensure_target(conn, base_url: str, *, public_pool: bool = True) -> dict:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO target_profiles (target_id, scope, tags, category, weight, is_public_pool)
-            VALUES (%s, 'system', %s, 'adult', 45, %s)
+            INSERT INTO target_profiles (target_id, scope, tags, category, weight, is_public_pool, is_item_public_pool)
+            VALUES (%s, 'system', %s, 'adult', 45, %s, %s)
             ON CONFLICT (target_id) DO UPDATE SET
                 scope = EXCLUDED.scope,
                 tags = EXCLUDED.tags,
                 category = EXCLUDED.category,
                 weight = EXCLUDED.weight,
                 is_public_pool = EXCLUDED.is_public_pool,
+                is_item_public_pool = EXCLUDED.is_item_public_pool,
                 updated_at = NOW()
             """,
-            (target_row["id"], Jsonb([CAOLIU_SITE_NAME, "成人", "达盖尔的旗帜", "草榴"]), public_pool),
+            (target_row["id"], Jsonb([CAOLIU_SITE_NAME, "成人", "达盖尔的旗帜", "草榴"]), public_pool, public_pool),
         )
     return target_row
 

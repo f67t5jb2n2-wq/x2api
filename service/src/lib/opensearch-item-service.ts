@@ -180,6 +180,18 @@ async function getSubscribedTargetIds(clientId: string) {
   });
 }
 
+async function getItemPublicPoolTargetIds() {
+  return cachedJson("os-items-public-targets", [], 120, async () => {
+    const sql = getSql();
+    const rows = asRows<{ targetId: string }>(await sql`
+      SELECT target_id AS "targetId"
+      FROM target_profiles
+      WHERE is_item_public_pool = TRUE
+    `);
+    return rows.map((row) => row.targetId);
+  });
+}
+
 async function getFeedClient(feedToken: string) {
   const sql = getSql();
   const rows = asRows<{ clientId: string }>(await sql`
@@ -283,19 +295,25 @@ async function rowsFromResponse(response: OpenSearchSearchResponse) {
   return rows.filter((row) => visibleIds.has(row.id));
 }
 
-function sourceScopeFilter(sourceScope: ItemQuery["sourceScope"], targetIds: string[]) {
+function sourceScopeFilter(sourceScope: ItemQuery["sourceScope"], targetIds: string[], publicTargetIds: string[]) {
   const scope = sourceScope ?? "user";
   if (scope === "public") {
-    return { term: { is_public_pool: true } };
+    if (publicTargetIds.length === 0) {
+      return { term: { target_id: "__no_public_pool__" } };
+    }
+    return { terms: { target_id: publicTargetIds } };
   }
   if (scope === "all") {
     if (targetIds.length === 0) {
-      return { term: { is_public_pool: true } };
+      if (publicTargetIds.length === 0) {
+        return { term: { target_id: "__no_public_pool__" } };
+      }
+      return { terms: { target_id: publicTargetIds } };
     }
+    const mergedTargetIds = normalizedUnique([...targetIds, ...publicTargetIds]);
     return {
       bool: {
-        should: [{ terms: { target_id: targetIds } }, { term: { is_public_pool: true } }],
-        minimum_should_match: 1,
+        filter: [{ terms: { target_id: mergedTargetIds } }],
       },
     };
   }
@@ -307,6 +325,7 @@ function sourceScopeFilter(sourceScope: ItemQuery["sourceScope"], targetIds: str
 
 function buildItemsQuery(input: {
   targetIds: string[];
+  publicTargetIds: string[];
   size: number;
   keyword: string | null;
   targetFilter: string | null;
@@ -319,7 +338,7 @@ function buildItemsQuery(input: {
   const filter: unknown[] = [
     { range: { expires_at: { gt: "now" } } },
     { term: { item_role: "entry" } },
-    sourceScopeFilter(input.sourceScope, input.targetIds),
+    sourceScopeFilter(input.sourceScope, input.targetIds, input.publicTargetIds),
   ];
 
   if (input.sinceFilter) {
@@ -419,6 +438,7 @@ export const __testables = {
 
 async function queryItemsFromOpenSearch(input: {
   targetIds: string[];
+  publicTargetIds: string[];
   limit: number;
   cursor: ItemCursor | null;
   keyword: string | null;
@@ -470,8 +490,10 @@ export async function listItemsFromOpenSearch(query: ItemQuery): Promise<OpenSea
   const normalizedCategories = normalizedUnique((query.categories ?? []).map((category) => category.trim()));
   const categoryFilters = await normalizeCategoryFilters(normalizedCategories);
   const targetIds = await getSubscribedTargetIds(query.clientId);
+  const publicTargetIds = await getItemPublicPoolTargetIds();
   const rows = await queryItemsFromOpenSearch({
     targetIds,
+    publicTargetIds,
     limit,
     cursor,
     keyword: normalizeKey(query.keyword),
@@ -491,8 +513,10 @@ export async function listItemsByFeedTokenFromOpenSearch(query: FeedTokenQuery) 
   }
   const limit = normalizeLimit(query.limit, { defaultLimit: 50, maxLimit: 100 });
   const targetIds = await getSubscribedTargetIds(client.clientId);
+  const publicTargetIds = await getItemPublicPoolTargetIds();
   const rows = await queryItemsFromOpenSearch({
     targetIds,
+    publicTargetIds,
     limit,
     cursor: null,
     keyword: null,

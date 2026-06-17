@@ -496,10 +496,13 @@ CREATE TABLE IF NOT EXISTS target_profiles (
     category TEXT,
     weight INTEGER NOT NULL DEFAULT 0,
     is_public_pool BOOLEAN NOT NULL DEFAULT FALSE,
+    is_item_public_pool BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT target_profiles_scope_check CHECK (scope IN ('user', 'system'))
 );
+
+ALTER TABLE target_profiles ADD COLUMN IF NOT EXISTS is_item_public_pool BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS tags (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -564,6 +567,7 @@ CREATE TABLE IF NOT EXISTS user_feed_profiles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_target_profiles_public_pool ON target_profiles (is_public_pool, weight DESC);
+CREATE INDEX IF NOT EXISTS idx_target_profiles_item_public_pool ON target_profiles (is_item_public_pool, weight DESC);
 CREATE INDEX IF NOT EXISTS idx_tags_type_weight ON tags (type, weight DESC, name);
 CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags (tag_id);
 CREATE INDEX IF NOT EXISTS idx_item_tags_item_id ON item_tags (item_id);

@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+from pathlib import Path
 
 from psycopg import connect
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from collector.opensearch_items import delete_items as delete_opensearch_items  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +44,7 @@ def main() -> int:
             "DELETE FROM feed_events WHERE created_at < NOW() - (%s || ' days')::interval",
             "SELECT COUNT(*) FROM feed_events WHERE created_at < NOW() - (%s || ' days')::interval",
             interval_param(args.event_days),
+            False,
         ),
         (
             "low_score_video_items",
@@ -56,6 +65,7 @@ def main() -> int:
               AND vs.score <= %s
             """,
             (max(args.low_score_video_days, 1), args.low_score_threshold),
+            True,
         ),
         (
             "non_video_items",
@@ -70,6 +80,7 @@ def main() -> int:
               AND stored_at < NOW() - (%s || ' days')::interval
             """,
             interval_param(args.non_video_days),
+            True,
         ),
         (
             "regular_video_items",
@@ -98,6 +109,7 @@ def main() -> int:
               )
             """,
             (max(args.video_days, 1), args.high_score_threshold),
+            True,
         ),
         (
             "public_video_items",
@@ -126,6 +138,7 @@ def main() -> int:
               )
             """,
             (max(args.public_video_days, 1), args.high_score_threshold),
+            True,
         ),
         (
             "high_score_video_items",
@@ -146,25 +159,35 @@ def main() -> int:
               AND vs.score >= %s
             """,
             (max(args.high_score_video_days, 1), args.high_score_threshold),
+            True,
         ),
     ]
 
     result: dict[str, int] = {}
+    deleted_item_ids: list[str] = []
     with connect(database_url, prepare_threshold=None) as conn:
         with conn.cursor() as cur:
-            for name, delete_sql, count_sql, params in statements:
+            for name, delete_sql, count_sql, params, deletes_items in statements:
                 if args.apply:
-                    cur.execute(delete_sql, params)
-                    result[name] = cur.rowcount
+                    if deletes_items:
+                        cur.execute(f"{delete_sql.rstrip()}\nRETURNING id::text AS id", params)
+                        rows = cur.fetchall()
+                        result[name] = len(rows)
+                        deleted_item_ids.extend(str(row[0] if not isinstance(row, dict) else row["id"]) for row in rows)
+                    else:
+                        cur.execute(delete_sql, params)
+                        result[name] = cur.rowcount
                 else:
                     cur.execute(count_sql, params)
                     result[name] = cur.fetchone()[0]
         if args.apply:
             conn.commit()
+            if deleted_item_ids:
+                delete_opensearch_items(deleted_item_ids)
         else:
             conn.rollback()
 
-    print({"apply": args.apply, "deleted": result})
+    print({"apply": args.apply, "deleted": result, "opensearch_deleted": len(set(deleted_item_ids)) if args.apply else 0})
     return 0
 
 

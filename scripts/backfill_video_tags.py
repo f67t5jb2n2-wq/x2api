@@ -15,6 +15,10 @@ from psycopg.rows import dict_row
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_LEXICON_URL = "https://raw.githubusercontent.com/M1Z2105a4/resource/refs/heads/main/feed_lexicon.json"
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from collector.opensearch_items import sync_items as sync_items_to_opensearch  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -137,6 +141,7 @@ def main() -> int:
     tagged_items = 0
     created_relations = 0
     dry_run_samples: list[dict[str, Any]] = []
+    touched_item_ids: list[str] = []
 
     with connect(database_url, row_factory=dict_row, prepare_threshold=None) as conn:
         with conn.cursor() as cur:
@@ -201,6 +206,7 @@ def main() -> int:
                 continue
 
             tagged_items += 1
+            touched_item_ids.append(str(row["id"]))
             if not args.apply:
                 if len(dry_run_samples) < 10:
                     dry_run_samples.append(
@@ -227,6 +233,8 @@ def main() -> int:
 
         if args.apply:
             conn.commit()
+            if touched_item_ids:
+                sync_items_to_opensearch(conn, touched_item_ids)
         else:
             conn.rollback()
 

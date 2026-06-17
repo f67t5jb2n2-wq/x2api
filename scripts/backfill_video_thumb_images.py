@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from collector.twitter_monitor import get_original_image_url  # noqa: E402
+from collector.opensearch_items import sync_items as sync_items_to_opensearch  # noqa: E402
 
 
 VIDEO_THUMB_PATTERNS = (
@@ -116,6 +117,7 @@ def main() -> int:
                     [(Jsonb(images), item_id) for images, item_id in changed_rows],
                 )
             conn.commit()
+            sync_items_to_opensearch(conn, [str(item_id) for _, item_id in changed_rows])
         else:
             conn.rollback()
 

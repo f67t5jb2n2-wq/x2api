@@ -81,6 +81,22 @@ def delete_item(item_id: str) -> bool:
         return False
 
 
+def delete_items(item_ids: Iterable[str]) -> int:
+    ids = [str(item_id) for item_id in dict.fromkeys(item_id for item_id in item_ids if item_id)]
+    if not ids or not is_opensearch_write_enabled():
+        return 0
+
+    client = get_client()
+    if client is None:
+        return 0
+
+    deleted = 0
+    for item_id in ids:
+        if delete_item(item_id):
+            deleted += 1
+    return deleted
+
+
 def update_item_stats(item_id: str, stats: dict[str, int | float]) -> bool:
     if not is_opensearch_write_enabled():
         return False

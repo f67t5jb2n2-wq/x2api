@@ -12,6 +12,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from collector.twitter_monitor import parse_datetime  # noqa: E402
+from collector.opensearch_items import sync_items as sync_items_to_opensearch  # noqa: E402
 
 
 def main() -> int:
@@ -20,6 +21,7 @@ def main() -> int:
         raise RuntimeError("Missing DATABASE_URL environment variable.")
 
     skipped = 0
+    updated_ids: list[str] = []
 
     with connect(database_url, row_factory=dict_row, prepare_threshold=None) as conn:
         with conn.cursor() as cur:
@@ -41,6 +43,7 @@ def main() -> int:
                 skipped += 1
                 continue
             updates.append((parsed, row["id"]))
+            updated_ids.append(str(row["id"]))
 
         with conn.cursor() as cur:
             cur.executemany(
@@ -53,6 +56,8 @@ def main() -> int:
             )
 
         conn.commit()
+        if updated_ids:
+            sync_items_to_opensearch(conn, updated_ids)
 
     print(
         {

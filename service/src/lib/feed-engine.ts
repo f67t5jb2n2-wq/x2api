@@ -151,6 +151,7 @@ type OpenSearchFeedRow = {
   tags: string[];
   expiresAt: string;
   videoUrlExpiresAt: string;
+  viewerReaction: VideoFeedItem["viewerReaction"];
   stats: {
     impressions: number;
     plays: number;

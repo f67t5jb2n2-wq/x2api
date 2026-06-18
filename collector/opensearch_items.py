@@ -511,6 +511,17 @@ def _update_parent_entry_playback(
     if not parent_item_id:
         return False
 
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE items
+            SET video_url = %s,
+                video_url_expires_at = %s
+            WHERE id = %s
+            """,
+            (video_url, video_url_expires_at, parent_item_id),
+        )
+
     return update_item_playback(
         str(parent_item_id),
         video_url=video_url,
@@ -664,10 +675,11 @@ def upsert_item_record(
                     target_id, guid, item_role, parent_item_id, group_key, variant_key, variant_index,
                     video_url, expires_at, video_url_expires_at, published_at, stored_at, is_retweet, metadata
                 )
-                VALUES (%s, %s, 'entry', NULL, %s, NULL, NULL, NULL, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, 'entry', NULL, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (target_id, guid) DO UPDATE SET
                     item_role = 'entry',
                     group_key = EXCLUDED.group_key,
+                    video_url = EXCLUDED.video_url,
                     expires_at = EXCLUDED.expires_at,
                     video_url_expires_at = EXCLUDED.video_url_expires_at,
                     published_at = COALESCE(items.published_at, EXCLUDED.published_at),
@@ -678,6 +690,7 @@ def upsert_item_record(
                     target_id,
                     entry_guid,
                     group_key,
+                    video_url,
                     resolved_expires_at,
                     resolved_video_url_expires_at,
                     published_at,

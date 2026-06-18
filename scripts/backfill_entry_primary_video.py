@@ -21,53 +21,64 @@ def main() -> int:
       raise SystemExit("DATABASE_URL is required")
 
     updated = 0
+    batch_size = 200
+    last_entry_id = ""
     with psycopg.connect(database_url, row_factory=dict_row, prepare_threshold=None) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT ON (entry.id)
-                    entry.id::text AS entry_id,
-                    variant.video_url,
-                    variant.video_url_expires_at,
-                    variant.variant_key,
-                    variant.metadata,
-                    variant.parent_item_id,
-                    variant.published_at,
-                    variant.stored_at
-                FROM items entry
-                JOIN items variant
-                  ON variant.parent_item_id = entry.id
-                WHERE entry.item_role = 'entry'
-                  AND variant.item_role = 'video_variant'
-                  AND entry.video_url IS NULL
-                  AND variant.video_url IS NOT NULL
-                ORDER BY entry.id, variant.variant_index NULLS FIRST, variant.published_at DESC NULLS LAST, variant.stored_at DESC
-                """
-            )
-            rows = cur.fetchall()
-
-        for row in rows:
+        while True:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    UPDATE items
-                    SET video_url = %s,
-                        video_url_expires_at = %s
-                    WHERE id = %s
+                    SELECT * FROM (
+                        SELECT DISTINCT ON (entry.id)
+                            entry.id::text AS entry_id,
+                            variant.video_url,
+                            variant.video_url_expires_at,
+                            variant.variant_key,
+                            variant.published_at,
+                            variant.stored_at
+                        FROM items entry
+                        JOIN items variant
+                          ON variant.parent_item_id = entry.id
+                        WHERE entry.item_role = 'entry'
+                          AND variant.item_role = 'video_variant'
+                          AND variant.video_url IS NOT NULL
+                          AND entry.id::text > %s
+                        ORDER BY entry.id, variant.variant_index NULLS FIRST, variant.published_at DESC NULLS LAST, variant.stored_at DESC
+                    ) batch
+                    ORDER BY entry_id
+                    LIMIT %s
                     """,
-                    (row["video_url"], row["video_url_expires_at"], row["entry_id"]),
+                    (last_entry_id, batch_size),
                 )
+                rows = cur.fetchall()
 
-            update_item_playback(
-                row["entry_id"],
-                video_url=row["video_url"],
-                video_url_expires_at=row["video_url_expires_at"],
-                video_key=row["variant_key"] or row["video_url"],
-                conn=conn,
-            )
-            updated += 1
+            if not rows:
+                break
 
-        conn.commit()
+            for row in rows:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE items
+                        SET video_url = %s,
+                            video_url_expires_at = %s
+                        WHERE id = %s
+                        """,
+                        (row["video_url"], row["video_url_expires_at"], row["entry_id"]),
+                    )
+
+                update_item_playback(
+                    row["entry_id"],
+                    video_url=row["video_url"],
+                    video_url_expires_at=row["video_url_expires_at"],
+                    video_key=row["variant_key"] or row["video_url"],
+                    conn=conn,
+                )
+                updated += 1
+                last_entry_id = row["entry_id"]
+
+            conn.commit()
+            print(f"updated_entries={updated}", flush=True)
 
     print(f"updated_entries={updated}")
     return 0

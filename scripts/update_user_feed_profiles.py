@@ -93,9 +93,46 @@ INNER JOIN items i ON i.id = fe.item_id
 INNER JOIN targets t ON t.id = i.target_id
 LEFT JOIN target_profiles tp ON tp.target_id = t.id
 WHERE fe.created_at >= NOW() - (%s || ' days')::interval
-  AND fe.event_type IN ('impression', 'play', 'finish', 'like', 'share', 'skip', 'dislike')
+  AND fe.event_type IN ('impression', 'play', 'finish', 'share', 'skip')
   AND (%s::int <= 1 OR MOD(hashtext(fe.client_id::text)::bigint + 2147483648, %s::int) = %s::int)
 ORDER BY fe.client_id, fe.created_at ASC
+"""
+
+REACTION_SQL = """
+SELECT
+  fir.client_id::text AS client_id,
+  fir.item_id::text AS item_id,
+  fir.reaction AS event_type,
+  NULL::integer AS watch_ms,
+  fir.updated_at AS created_at,
+  t.source,
+  CASE
+    WHEN t.source = 'youtube' THEN 'youtube:' || t.value
+    WHEN t.source IN ('heiliao', 'cg91', 'baoliao51', 'douyin', '18mh', 'rou', 'dadaafa', '18j', '1mtif', 'tikporn', '91porna', '91porn', '91rb', 'badnews', 'bdrq', 'avgood', '705hs', 'xxxtik', 'affair', 'attach', 'dirtyship', 'influencersgonewild', 'missav') THEN t.source
+    WHEN t.kind = 'keyword' THEN 'search:' || t.value
+    ELSE t.value
+  END AS target,
+  LOWER(COALESCE(tp.category, '')) AS category,
+  COALESCE((
+    SELECT ARRAY_AGG(DISTINCT LOWER(tag_name) ORDER BY LOWER(tag_name))
+    FROM (
+      SELECT tag.name AS tag_name
+      FROM item_tags it
+      INNER JOIN tags tag ON tag.id = it.tag_id
+      WHERE it.item_id = i.id
+      UNION
+      SELECT profile_tag.name AS tag_name
+      FROM jsonb_array_elements_text(COALESCE(tp.tags, '[]'::jsonb)) AS profile_tag(name)
+    ) tag_values
+    WHERE NULLIF(BTRIM(tag_name), '') IS NOT NULL
+  ), ARRAY[]::text[]) AS tags
+FROM feed_item_reactions fir
+INNER JOIN items i ON i.id = fir.item_id
+INNER JOIN targets t ON t.id = i.target_id
+LEFT JOIN target_profiles tp ON tp.target_id = t.id
+WHERE fir.updated_at >= NOW() - (%s || ' days')::interval
+  AND (%s::int <= 1 OR MOD(hashtext(fir.client_id::text)::bigint + 2147483648, %s::int) = %s::int)
+ORDER BY fir.client_id, fir.updated_at ASC
 """
 
 UPSERT_SQL = """
@@ -426,6 +463,8 @@ def main() -> int:
             with conn.cursor() as cur:
                 cur.execute(PROFILE_SQL, (lookback_days, shard_count, shard_count, shard_index))
                 rows = cur.fetchall()
+                cur.execute(REACTION_SQL, (lookback_days, shard_count, shard_count, shard_index))
+                rows.extend(cur.fetchall())
 
             now = datetime.now(timezone.utc)
             profiles = build_profiles(rows, now)

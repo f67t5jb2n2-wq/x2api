@@ -906,6 +906,7 @@ Authorization: Bearer x2d_xxx
       "kind": "keyword",
       "category": "tech",
       "tags": ["AI", "科技"],
+      "viewerReaction": null,
       "stats": {
         "impressions": 0,
         "plays": 0,
@@ -930,11 +931,12 @@ Authorization: Bearer x2d_xxx
 
 - `videoKey` 是稳定视频身份。YouTube 使用 `youtube:<videoId>`，客户端应用它做缓存、去重和已看状态，不应使用会刷新的 `videoUrl` 做身份。
 - `expiresAt` 是业务数据保留期限；`videoUrlExpiresAt` 是播放 URL 过期时间。
+- `viewerReaction` 表示当前客户端对该视频的即时态，取值为 `null`、`like`、`dislike`。
 - YouTube 视频只有 `expiresAt > now` 且 `videoUrlExpiresAt > now + 10 minutes` 时才会返回；客户端如果回到已过期的旧数据，应提示并自动跳过。
 
 ### 12.3 `POST /api/videos/events`
 
-上报刷视频行为，并同步聚合到 `video_stats`。
+上报刷视频行为，并同步更新当前 reaction 状态与 `video_stats`。
 
 请求体：
 
@@ -953,9 +955,23 @@ Authorization: Bearer x2d_xxx
 - `play`
 - `finish`
 - `like`
+- `unlike`
 - `dislike`
+- `undislike`
 - `skip`
 - `share`
+
+语义说明：
+
+- `impression` / `play` / `finish` / `skip` / `share`
+  - 仍然按行为次数累计
+- `like` / `dislike`
+  - 表示将当前 reaction 置为对应状态
+- `unlike` / `undislike`
+  - 表示清除当前 reaction
+- `like` 和 `dislike` 是互斥状态
+- 重复发送同一 reaction 不会重复增加 `likes` / `dislikes`
+- `video_stats` 统计的是当前净 reaction 结果，不是 reaction 点击总次数
 
 响应：
 

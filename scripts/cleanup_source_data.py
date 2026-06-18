@@ -82,6 +82,21 @@ def cleanup_source(conn: psycopg.Connection, source: str) -> dict[str, int]:
                 INNER JOIN targets t ON t.id = i.target_id
                 WHERE t.source = %s
             )
+            DELETE FROM feed_item_reactions fir
+            WHERE fir.item_id IN (SELECT id FROM doomed_items)
+            """,
+            (source,),
+        )
+        feed_item_reactions_deleted = cur.rowcount
+
+        cur.execute(
+            """
+            WITH doomed_items AS (
+                SELECT i.id
+                FROM items i
+                INNER JOIN targets t ON t.id = i.target_id
+                WHERE t.source = %s
+            )
             DELETE FROM item_tags it
             WHERE it.item_id IN (SELECT id FROM doomed_items)
             """,
@@ -127,6 +142,7 @@ def cleanup_source(conn: psycopg.Connection, source: str) -> dict[str, int]:
     return {
         "feed_events_deleted": feed_events_deleted,
         "video_stats_deleted": video_stats_deleted,
+        "feed_item_reactions_deleted": feed_item_reactions_deleted,
         "item_tags_deleted": item_tags_deleted,
         "items_deleted": items_deleted,
         "crawl_state_deleted": crawl_state_deleted,

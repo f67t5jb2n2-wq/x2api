@@ -297,7 +297,58 @@ test("all accepted video events are eligible for seen filtering", () => {
   const accepted = VIDEO_FEED_SEEN_EVENT_TYPES.map((eventType) => parseVideoEventType(eventType));
 
   assert.deepEqual(accepted, ["impression", "play", "finish", "like", "dislike", "skip", "share"]);
+  assert.equal(parseVideoEventType("unlike"), "unlike");
+  assert.equal(parseVideoEventType("undislike"), "undislike");
   assert.throws(() => parseVideoEventType("watchMs"), /Invalid eventType/);
+});
+
+test("reaction helpers compute state transitions without double counting", () => {
+  assert.equal(__testables.nextReactionForEvent("like"), "like");
+  assert.equal(__testables.nextReactionForEvent("dislike"), "dislike");
+  assert.equal(__testables.nextReactionForEvent("unlike"), null);
+  assert.equal(__testables.nextReactionForEvent("undislike"), null);
+
+  assert.deepEqual(__testables.reactionDelta(null, "like"), { likes: 1, dislikes: 0, score: 5 });
+  assert.deepEqual(__testables.reactionDelta("like", null), { likes: -1, dislikes: 0, score: -5 });
+  assert.deepEqual(__testables.reactionDelta(null, "dislike"), { likes: 0, dislikes: 1, score: -5 });
+  assert.deepEqual(__testables.reactionDelta("dislike", null), { likes: 0, dislikes: -1, score: 5 });
+  assert.deepEqual(__testables.reactionDelta("like", "dislike"), { likes: -1, dislikes: 1, score: -10 });
+  assert.deepEqual(__testables.reactionDelta("dislike", "like"), { likes: 1, dislikes: -1, score: 10 });
+});
+
+test("event counter delta only increments non-reaction counters", () => {
+  assert.deepEqual(__testables.eventCounterDelta("play"), {
+    impressions: 0,
+    plays: 1,
+    finishes: 0,
+    skips: 0,
+    shares: 0,
+    score: 1,
+  });
+  assert.deepEqual(__testables.eventCounterDelta("share"), {
+    impressions: 0,
+    plays: 0,
+    finishes: 0,
+    skips: 0,
+    shares: 1,
+    score: 4,
+  });
+  assert.deepEqual(__testables.eventCounterDelta("like"), {
+    impressions: 0,
+    plays: 0,
+    finishes: 0,
+    skips: 0,
+    shares: 0,
+    score: 0,
+  });
+  assert.deepEqual(__testables.eventCounterDelta("undislike"), {
+    impressions: 0,
+    plays: 0,
+    finishes: 0,
+    skips: 0,
+    shares: 0,
+    score: 0,
+  });
 });
 
 test("normalizeVideoFeedKeyword trims whitespace and rejects overly long input", () => {

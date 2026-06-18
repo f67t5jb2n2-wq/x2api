@@ -546,9 +546,37 @@ CREATE TABLE IF NOT EXISTS feed_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     CONSTRAINT feed_events_type_check CHECK (
-        event_type IN ('impression', 'play', 'finish', 'like', 'dislike', 'skip', 'share')
+        event_type IN ('impression', 'play', 'finish', 'like', 'unlike', 'dislike', 'undislike', 'skip', 'share')
     )
 );
+
+CREATE TABLE IF NOT EXISTS feed_item_reactions (
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    reaction TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (client_id, item_id),
+    CONSTRAINT feed_item_reactions_type_check CHECK (
+        reaction IN ('like', 'dislike')
+    )
+);
+
+ALTER TABLE feed_events
+    DROP CONSTRAINT IF EXISTS feed_events_type_check;
+
+ALTER TABLE feed_events
+    ADD CONSTRAINT feed_events_type_check CHECK (
+        event_type IN ('impression', 'play', 'finish', 'like', 'unlike', 'dislike', 'undislike', 'skip', 'share')
+    );
+
+ALTER TABLE feed_item_reactions
+    DROP CONSTRAINT IF EXISTS feed_item_reactions_type_check;
+
+ALTER TABLE feed_item_reactions
+    ADD CONSTRAINT feed_item_reactions_type_check CHECK (
+        reaction IN ('like', 'dislike')
+    );
 
 CREATE TABLE IF NOT EXISTS user_feed_profiles (
     client_id UUID PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
@@ -579,6 +607,8 @@ CREATE INDEX IF NOT EXISTS idx_feed_events_client_recent_video_seen_v2
     ON feed_events (client_id, created_at DESC, item_id)
     WHERE event_type IN ('impression', 'play', 'finish', 'like', 'share', 'skip', 'dislike');
 CREATE INDEX IF NOT EXISTS idx_feed_events_created_at ON feed_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feed_item_reactions_client_updated_at ON feed_item_reactions (client_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feed_item_reactions_item_id ON feed_item_reactions (item_id);
 CREATE INDEX IF NOT EXISTS idx_user_feed_profiles_updated_at ON user_feed_profiles (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_feed_profiles_confidence ON user_feed_profiles (confidence DESC, event_count DESC);
 
@@ -617,5 +647,11 @@ EXECUTE FUNCTION set_updated_at();
 DROP TRIGGER IF EXISTS set_user_feed_profiles_updated_at ON user_feed_profiles;
 CREATE TRIGGER set_user_feed_profiles_updated_at
 BEFORE UPDATE ON user_feed_profiles
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS set_feed_item_reactions_updated_at ON feed_item_reactions;
+CREATE TRIGGER set_feed_item_reactions_updated_at
+BEFORE UPDATE ON feed_item_reactions
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();

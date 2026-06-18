@@ -1,4 +1,4 @@
-import { getSql } from "@/lib/db";
+import { getSql, withTransaction } from "@/lib/db";
 import { getOpenSearchClient, getOpenSearchItemsIndex } from "@/lib/opensearch";
 import { cacheDeleteJson } from "@/lib/redis-cache";
 import { asRows } from "@/lib/sql-result";
@@ -7,9 +7,11 @@ import type { AuthorPresentation } from "@/lib/author-presentation";
 import type { TargetSource } from "@/lib/targets";
 
 export type VideoFeedSource = "user" | "public" | "mixed";
-export const VIDEO_FEED_EVENT_TYPES = ["impression", "play", "finish", "like", "dislike", "skip", "share"] as const;
+export const VIDEO_FEED_EVENT_TYPES = ["impression", "play", "finish", "like", "unlike", "dislike", "undislike", "skip", "share"] as const;
 export type VideoEventType = (typeof VIDEO_FEED_EVENT_TYPES)[number];
-export const VIDEO_FEED_SEEN_EVENT_TYPES = VIDEO_FEED_EVENT_TYPES;
+export const VIDEO_FEED_SEEN_EVENT_TYPES = ["impression", "play", "finish", "like", "dislike", "skip", "share"] as const;
+export type VideoFeedSeenEventType = (typeof VIDEO_FEED_SEEN_EVENT_TYPES)[number];
+export type VideoReaction = "like" | "dislike";
 
 export type VideoPlaybackFailureRemovalInput = {
   clientId: string;
@@ -54,6 +56,7 @@ type VideoFeedItemBase = {
   videoKey: string;
   expiresAt: string;
   videoUrlExpiresAt: string;
+  viewerReaction: VideoReaction | null;
   stats: {
     impressions: number;
     plays: number;
@@ -96,6 +99,11 @@ type VideoFeedDiversityItem = {
   target: string;
 };
 
+type VideoReactionRow = {
+  itemId: string;
+  reaction: VideoReaction;
+};
+
 type DiversityState = {
   ids: Set<string>;
   guids: Set<string>;
@@ -129,6 +137,55 @@ export function parseVideoEventType(value: unknown): VideoEventType {
   }
 
   throw new Error("Invalid eventType.");
+}
+
+function isReactionEventType(eventType: VideoEventType): eventType is "like" | "unlike" | "dislike" | "undislike" {
+  return eventType === "like" || eventType === "unlike" || eventType === "dislike" || eventType === "undislike";
+}
+
+function nextReactionForEvent(eventType: VideoEventType): VideoReaction | null {
+  switch (eventType) {
+    case "like":
+      return "like";
+    case "dislike":
+      return "dislike";
+    case "unlike":
+    case "undislike":
+      return null;
+    default:
+      return null;
+  }
+}
+
+function reactionDelta(previousReaction: VideoReaction | null, nextReaction: VideoReaction | null) {
+  const previousLike = previousReaction === "like" ? 1 : 0;
+  const previousDislike = previousReaction === "dislike" ? 1 : 0;
+  const nextLike = nextReaction === "like" ? 1 : 0;
+  const nextDislike = nextReaction === "dislike" ? 1 : 0;
+  const likes = nextLike - previousLike;
+  const dislikes = nextDislike - previousDislike;
+  const score = likes * 5 + dislikes * -5;
+  return { likes, dislikes, score };
+}
+
+function eventCounterDelta(eventType: VideoEventType) {
+  return {
+    impressions: eventType === "impression" ? 1 : 0,
+    plays: eventType === "play" ? 1 : 0,
+    finishes: eventType === "finish" ? 1 : 0,
+    skips: eventType === "skip" ? 1 : 0,
+    shares: eventType === "share" ? 1 : 0,
+    score:
+      eventType === "finish"
+        ? 3
+        : eventType === "play"
+          ? 1
+          : eventType === "skip"
+            ? -1
+            : eventType === "share"
+              ? 4
+              : 0,
+  };
 }
 
 function normalizeDiversityKey(value: string | null | undefined) {
@@ -532,6 +589,23 @@ function isActiveVideoDocument(source: Record<string, unknown> | null) {
   return true;
 }
 
+export async function getViewerReactions(clientId: string, itemIds: string[]) {
+  const normalizedItemIds = Array.from(new Set(itemIds.map((itemId) => itemId.trim()).filter(Boolean)));
+  if (normalizedItemIds.length === 0) {
+    return new Map<string, VideoReaction>();
+  }
+
+  const sql = getSql();
+  const rows = asRows<VideoReactionRow>(await sql`
+    SELECT item_id::text AS "itemId", reaction
+    FROM feed_item_reactions
+    WHERE client_id = ${clientId}
+      AND item_id = ANY(${normalizedItemIds}::uuid[])
+  `);
+
+  return new Map(rows.map((row) => [row.itemId, row.reaction]));
+}
+
 export async function recordVideoEvent(input: {
   clientId: string;
   itemId: string;
@@ -544,60 +618,98 @@ export async function recordVideoEvent(input: {
     throw new Error("Invalid itemId.");
   }
 
-  const sql = getSql();
   const watchMs = typeof input.watchMs === "number" && Number.isFinite(input.watchMs) ? Math.max(0, Math.floor(input.watchMs)) : null;
   const metadata = input.metadata ?? {};
 
-  await sql`
-    INSERT INTO feed_events (client_id, item_id, event_type, watch_ms, metadata)
-    VALUES (${input.clientId}, ${input.itemId}, ${input.eventType}, ${watchMs}, ${JSON.stringify(metadata)}::jsonb)
-  `;
+  await withTransaction(async (client) => {
+    await client.query(
+      `
+        INSERT INTO feed_events (client_id, item_id, event_type, watch_ms, metadata)
+        VALUES ($1, $2, $3, $4, $5::jsonb)
+      `,
+      [input.clientId, input.itemId, input.eventType, watchMs, JSON.stringify(metadata)],
+    );
 
-  await sql`
-    INSERT INTO video_stats (
-      item_id,
-      impressions,
-      plays,
-      finishes,
-      likes,
-      dislikes,
-      skips,
-      shares,
-      score,
-      last_event_at
-    )
-    VALUES (
-      ${input.itemId},
-      CASE WHEN ${input.eventType} = 'impression' THEN 1 ELSE 0 END,
-      CASE WHEN ${input.eventType} = 'play' THEN 1 ELSE 0 END,
-      CASE WHEN ${input.eventType} = 'finish' THEN 1 ELSE 0 END,
-      CASE WHEN ${input.eventType} = 'like' THEN 1 ELSE 0 END,
-      CASE WHEN ${input.eventType} = 'dislike' THEN 1 ELSE 0 END,
-      CASE WHEN ${input.eventType} = 'skip' THEN 1 ELSE 0 END,
-      CASE WHEN ${input.eventType} = 'share' THEN 1 ELSE 0 END,
-      CASE
-        WHEN ${input.eventType} = 'finish' THEN 3
-        WHEN ${input.eventType} = 'like' THEN 5
-        WHEN ${input.eventType} = 'share' THEN 4
-        WHEN ${input.eventType} = 'play' THEN 1
-        WHEN ${input.eventType} = 'skip' THEN -1
-        WHEN ${input.eventType} = 'dislike' THEN -5
-        ELSE 0
-      END,
-      NOW()
-    )
-    ON CONFLICT (item_id) DO UPDATE SET
-      impressions = video_stats.impressions + EXCLUDED.impressions,
-      plays = video_stats.plays + EXCLUDED.plays,
-      finishes = video_stats.finishes + EXCLUDED.finishes,
-      likes = video_stats.likes + EXCLUDED.likes,
-      dislikes = video_stats.dislikes + EXCLUDED.dislikes,
-      skips = video_stats.skips + EXCLUDED.skips,
-      shares = video_stats.shares + EXCLUDED.shares,
-      score = video_stats.score + EXCLUDED.score,
-      last_event_at = NOW(),
-      updated_at = NOW()
-  `;
+    let reactionStats = { likes: 0, dislikes: 0, score: 0 };
+    if (isReactionEventType(input.eventType)) {
+      const reactionResult = await client.query<{ reaction: VideoReaction }>(
+        `
+          SELECT reaction
+          FROM feed_item_reactions
+          WHERE client_id = $1
+            AND item_id = $2
+          LIMIT 1
+        `,
+        [input.clientId, input.itemId],
+      );
+      const previousReaction = reactionResult.rows[0]?.reaction ?? null;
+      const nextReaction = nextReactionForEvent(input.eventType);
+      reactionStats = reactionDelta(previousReaction, nextReaction);
+
+      if (nextReaction === null) {
+        await client.query(
+          `
+            DELETE FROM feed_item_reactions
+            WHERE client_id = $1
+              AND item_id = $2
+          `,
+          [input.clientId, input.itemId],
+        );
+      } else {
+        await client.query(
+          `
+            INSERT INTO feed_item_reactions (client_id, item_id, reaction)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (client_id, item_id) DO UPDATE SET
+              reaction = EXCLUDED.reaction,
+              updated_at = NOW()
+          `,
+          [input.clientId, input.itemId, nextReaction],
+        );
+      }
+    }
+
+    const counterStats = eventCounterDelta(input.eventType);
+    await client.query(
+      `
+        INSERT INTO video_stats (
+          item_id,
+          impressions,
+          plays,
+          finishes,
+          likes,
+          dislikes,
+          skips,
+          shares,
+          score,
+          last_event_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+        ON CONFLICT (item_id) DO UPDATE SET
+          impressions = GREATEST(0, video_stats.impressions + EXCLUDED.impressions),
+          plays = GREATEST(0, video_stats.plays + EXCLUDED.plays),
+          finishes = GREATEST(0, video_stats.finishes + EXCLUDED.finishes),
+          likes = GREATEST(0, video_stats.likes + EXCLUDED.likes),
+          dislikes = GREATEST(0, video_stats.dislikes + EXCLUDED.dislikes),
+          skips = GREATEST(0, video_stats.skips + EXCLUDED.skips),
+          shares = GREATEST(0, video_stats.shares + EXCLUDED.shares),
+          score = video_stats.score + EXCLUDED.score,
+          last_event_at = NOW(),
+          updated_at = NOW()
+      `,
+      [
+        input.itemId,
+        counterStats.impressions,
+        counterStats.plays,
+        counterStats.finishes,
+        reactionStats.likes,
+        reactionStats.dislikes,
+        counterStats.skips,
+        counterStats.shares,
+        counterStats.score + reactionStats.score,
+      ],
+    );
+  });
 
   await updateOpenSearchVideoStats(input.itemId);
   await invalidateVideoFeedEventCaches(input.clientId);
@@ -621,7 +733,10 @@ export function buildPlaybackFailureRemovalMetadata(input: {
 }
 
 export const __testables = {
+  eventCounterDelta,
   getOpenSearchVideoDocumentLike,
+  nextReactionForEvent,
+  reactionDelta,
 };
 
 export async function removeVideoFeedItemAfterPlaybackFailure(input: VideoPlaybackFailureRemovalInput) {

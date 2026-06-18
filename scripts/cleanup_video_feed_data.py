@@ -47,6 +47,28 @@ def main() -> int:
             False,
         ),
         (
+            "feed_item_reactions",
+            """
+            DELETE FROM feed_item_reactions fir
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM items i
+              WHERE i.id = fir.item_id
+            )
+            """,
+            """
+            SELECT COUNT(*)
+            FROM feed_item_reactions fir
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM items i
+              WHERE i.id = fir.item_id
+            )
+            """,
+            (),
+            False,
+        ),
+        (
             "low_score_video_items",
             """
             DELETE FROM items i

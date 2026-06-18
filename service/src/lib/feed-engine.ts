@@ -8,6 +8,7 @@ import type { TargetSource } from "@/lib/targets";
 import {
   buildVideoFeedNextCursorPayload,
   compactVideoFeedCursorSeenValues,
+  getViewerReactions,
   normalizeVideoFeedKeyword,
   selectDiverseVideoItems,
   VIDEO_FEED_SEEN_EVENT_TYPES,
@@ -577,6 +578,7 @@ function toRow(source: OpenSearchFeedSource): OpenSearchFeedRow | null {
     tags: Array.isArray(source.tags) ? source.tags : [],
     expiresAt: source.expires_at,
     videoUrlExpiresAt: source.video_url_expires_at,
+    viewerReaction: null,
     stats: {
       impressions: toNumber(source.impressions),
       plays: toNumber(source.plays),
@@ -1110,10 +1112,12 @@ export async function listVideoFeedFromOpenSearch(query: VideoFeedQuery) {
     items,
   });
   const nextCursor = nextCursorPayload ? encodeCursor(nextCursorPayload) : null;
+  const viewerReactions = await getViewerReactions(query.clientId, items.map((item) => item.id));
 
   return {
     items: items.map(({ guid: _guid, sortTime: _sortTime, ...item }) => ({
       ...item,
+      viewerReaction: viewerReactions.get(item.id) ?? null,
       ...resolveAuthorPresentation(item),
     })) as VideoFeedItem[],
     pagination: {

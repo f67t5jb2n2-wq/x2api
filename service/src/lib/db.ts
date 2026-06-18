@@ -1,4 +1,4 @@
-import { Pool, type QueryResult } from "pg";
+import { Pool, type PoolClient, type QueryResult } from "pg";
 
 import { getRequiredEnv } from "@/lib/env";
 
@@ -116,4 +116,23 @@ export function getSql(): SqlFunction {
   }
 
   return sqlClient;
+}
+
+export async function withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await callback(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Ignore rollback failures and rethrow the original error.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }

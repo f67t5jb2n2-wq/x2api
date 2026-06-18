@@ -345,7 +345,7 @@ def parse_detail_page(detail_url: str, list_item: dict | None = None) -> dict:
         node.decompose()
 
     title = detail_title(soup) or (list_item or {}).get("title") or CAOLIU_SITE_NAME
-    text_content = clean_text(content_soup.get_text("\n", strip=True)) or title
+    text_content = title
     images = extract_image_urls(content_soup, detail_url)
     video_candidates = extract_video_candidates(content_soup, detail_url)
     outbound_links = extract_outbound_links(content_soup, detail_url)

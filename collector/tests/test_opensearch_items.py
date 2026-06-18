@@ -29,7 +29,7 @@ class OpenSearchItemsTest(unittest.TestCase):
     def test_update_parent_entry_playback_uses_parent_item_id(self):
         fake_conn = MagicMock()
         fake_cursor = MagicMock()
-        fake_cursor.fetchone.return_value = {"parent_item_id": "entry-1"}
+        fake_cursor.fetchone.return_value = {"parent_item_id": "entry-1", "primary_item_id": "variant-1"}
         fake_conn.cursor.return_value.__enter__.return_value = fake_cursor
 
         with patch.object(opensearch_items, "update_item_playback", return_value=True) as mocked_update:
@@ -58,6 +58,9 @@ class OpenSearchItemsTest(unittest.TestCase):
         fake_conn = MagicMock()
         fake_cursor = MagicMock()
         fake_conn.cursor.return_value.__enter__.return_value = fake_cursor
+        fake_cursor.fetchone.side_effect = [
+            {"parent_item_id": "entry-1", "primary_item_id": "variant-1"},
+        ]
 
         with patch.object(opensearch_items, "update_item_playback", return_value=True) as mocked_update, \
              patch.object(opensearch_items, "_update_parent_entry_playback", return_value=True) as mocked_parent:
@@ -82,6 +85,25 @@ class OpenSearchItemsTest(unittest.TestCase):
             cover_url="https://example.com/poster.jpg",
             video_key="https://cdn.example.com/video.m3u8",
         )
+
+    def test_update_parent_entry_playback_ignores_non_primary_variants(self):
+        fake_conn = MagicMock()
+        fake_cursor = MagicMock()
+        fake_cursor.fetchone.side_effect = [
+            {"parent_item_id": "entry-1", "primary_item_id": "variant-1"},
+        ]
+        fake_conn.cursor.return_value.__enter__.return_value = fake_cursor
+
+        with patch.object(opensearch_items, "update_item_playback", return_value=True) as mocked_update:
+            updated = opensearch_items._update_parent_entry_playback(
+                fake_conn,
+                item_id="variant-2",
+                video_url="https://cdn.example.com/video-2.m3u8",
+                video_url_expires_at="2099-12-31T23:59:59Z",
+            )
+
+        self.assertFalse(updated)
+        mocked_update.assert_not_called()
 
 
 if __name__ == "__main__":

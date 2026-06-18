@@ -160,6 +160,10 @@ def _entry_guid_for_group(group_key: str, metadata: dict | None) -> str:
     return _normalize_variant_key((metadata or {}).get("entry_guid")) or f"{group_key}#entry"
 
 
+def _is_primary_variant_index(variant_index: int | None) -> bool:
+    return variant_index is None or variant_index <= 1
+
+
 def _compute_target_display(source: str | None, kind: str | None, value: str | None):
     if source == "youtube":
         return f"youtube:{value}"
@@ -498,9 +502,22 @@ def _update_parent_entry_playback(
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT parent_item_id::text AS parent_item_id
-            FROM items
-            WHERE id = %s
+            SELECT
+                current_item.parent_item_id::text AS parent_item_id,
+                (
+                    SELECT sibling.id::text
+                    FROM items sibling
+                    WHERE sibling.parent_item_id = current_item.parent_item_id
+                      AND sibling.item_role = 'video_variant'
+                      AND sibling.video_url IS NOT NULL
+                    ORDER BY sibling.variant_index NULLS FIRST,
+                             sibling.published_at DESC NULLS LAST,
+                             sibling.stored_at DESC,
+                             sibling.id DESC
+                    LIMIT 1
+                ) AS primary_item_id
+            FROM items current_item
+            WHERE current_item.id = %s
             LIMIT 1
             """,
             (item_id,),
@@ -508,7 +525,8 @@ def _update_parent_entry_playback(
         row = cur.fetchone()
 
     parent_item_id = row.get("parent_item_id") if row else None
-    if not parent_item_id:
+    primary_item_id = row.get("primary_item_id") if row else None
+    if not parent_item_id or primary_item_id != item_id:
         return False
 
     with conn.cursor() as cur:
@@ -668,6 +686,7 @@ def upsert_item_record(
         entry_metadata = dict(metadata or {})
         entry_metadata["group_key"] = group_key
         entry_video_count = int(entry_metadata.get("video_count") or 1)
+        promote_parent_video = _is_primary_variant_index(variant_index)
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
@@ -679,9 +698,15 @@ def upsert_item_record(
                 ON CONFLICT (target_id, guid) DO UPDATE SET
                     item_role = 'entry',
                     group_key = EXCLUDED.group_key,
-                    video_url = EXCLUDED.video_url,
+                    video_url = CASE
+                        WHEN items.video_url IS NULL OR %s THEN EXCLUDED.video_url
+                        ELSE items.video_url
+                    END,
                     expires_at = EXCLUDED.expires_at,
-                    video_url_expires_at = EXCLUDED.video_url_expires_at,
+                    video_url_expires_at = CASE
+                        WHEN items.video_url_expires_at IS NULL OR %s THEN EXCLUDED.video_url_expires_at
+                        ELSE items.video_url_expires_at
+                    END,
                     published_at = COALESCE(items.published_at, EXCLUDED.published_at),
                     metadata = COALESCE(items.metadata, '{}'::jsonb) || EXCLUDED.metadata
                 RETURNING id::text AS id
@@ -697,11 +722,13 @@ def upsert_item_record(
                     stored_at,
                     is_retweet,
                     Jsonb(entry_metadata),
+                    promote_parent_video,
+                    promote_parent_video,
                 ),
             )
             row = cur.fetchone()
         parent_item_id = str(row["id"]) if row and row.get("id") else None
-        if parent_item_id:
+        if parent_item_id and promote_parent_video:
             index_item_document(
                 conn,
                 item_id=parent_item_id,

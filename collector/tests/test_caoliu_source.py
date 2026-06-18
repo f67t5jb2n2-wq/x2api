@@ -72,6 +72,8 @@ class CaoliuSourceTests(unittest.TestCase):
 
         self.assertEqual(detail["guid"], "caoliu:7299919")
         self.assertEqual(detail["title"], "示例帖子")
+        self.assertEqual(detail["description"], "示例帖子")
+        self.assertEqual(detail["content"], "示例帖子")
         self.assertEqual(detail["author"], "楼主名字")
         self.assertEqual(detail["video_url"], "https://cdn.example.test/video.mp4")
         self.assertEqual(detail["video_type"], "direct")
